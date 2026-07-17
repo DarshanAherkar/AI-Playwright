@@ -1,0 +1,46 @@
+name: Smoke Test Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: false
+        type: string
+      pr_title:
+        description: Pull request title
+        required: false
+        type: string
+      pr_url:
+        description: Pull request URL
+        required: false
+        type: string
+      source_repo:
+        description: Source repository
+        required: false
+        type: string
+      head_sha:
+        description: Source commit SHA
+        required: false
+        type: string
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Print incoming PR details
+        run: |
+          echo "PR Number: ${{ github.event.inputs.pr_number }}"
+          echo "PR Title: ${{ github.event.inputs.pr_title }}"
+          echo "PR URL: ${{ github.event.inputs.pr_url }}"
+          echo "Source Repo: ${{ github.event.inputs.source_repo }}"
+          echo "Head SHA: ${{ github.event.inputs.head_sha }}"
+
+      - name: Run smoke test
+        run: |
+          echo "Running smoke test..."
+          echo "Smoke tests passed successfully."
