@@ -32,15 +32,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Print incoming PR details
+      - name: Run smoke test
         run: |
           echo "PR Number: ${{ github.event.inputs.pr_number }}"
           echo "PR Title: ${{ github.event.inputs.pr_title }}"
           echo "PR URL: ${{ github.event.inputs.pr_url }}"
           echo "Source Repo: ${{ github.event.inputs.source_repo }}"
           echo "Head SHA: ${{ github.event.inputs.head_sha }}"
-
-      - name: Run smoke test
-        run: |
-          echo "Running smoke test..."
           echo "Smoke tests passed successfully."
