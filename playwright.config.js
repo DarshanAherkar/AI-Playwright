@@ -9,7 +9,7 @@ module.exports = defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     headless: false,
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: 'https://darshanaherkar.github.io/AI-Testing/',
     trace: 'on-first-retry',
   },
 });
