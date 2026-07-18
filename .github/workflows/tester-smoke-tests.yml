@@ -69,15 +69,15 @@ jobs:
               Write-Host "[WARN] Could not start Ollama service: $_"
           }
 
-      - name: Pull Llama model
+      - name: Pull TinyLlama model
         shell: pwsh
         continue-on-error: true
         run: |
-          Write-Host "[ACTION] Pulling Llama model (if not already available)..."
+          Write-Host "[ACTION] Pulling TinyLlama model (637 MB - much faster)..."
           
           try {
-              ollama pull llama2
-              Write-Host "[OK] Llama model ready"
+              ollama pull tinyllama
+              Write-Host "[OK] TinyLlama model ready"
           } catch {
               Write-Host "[WARN] Could not pull model: $_"
           }

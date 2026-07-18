@@ -11,7 +11,7 @@ import json
 app = FastAPI()
 
 OLLAMA_URL = "http://localhost:11434"
-MODEL = "llama2"
+MODEL = "tinyllama"
 
 TEST_MAPPING = {
     "login.page.js": "tests/login.spec.js",
