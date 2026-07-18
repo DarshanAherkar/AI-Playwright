@@ -1,17 +1,15 @@
 const { test, expect } = require('@playwright/test');
 const { LoginPage } = require('../src/pages/login.page');
 const { SignUpPage } = require('../src/pages/signup.page');
-const { DashboardPage } = require('../src/pages/dashboard.page');
-const { CartPage } = require('../src/pages/cart.page');
-const { PaymentPage } = require('../src/pages/payment.page');
+const { ContactUsPage } = require('../src/pages/contact-us.page');
+const { AboutUsPage } = require('../src/pages/about-us.page');
 
 test.describe('POM smoke suite', () => {
   test('should open pages and create a basic flow', async ({ page }) => {
     const loginPage = new LoginPage(page);
     const signUpPage = new SignUpPage(page);
-    const dashboardPage = new DashboardPage(page);
-    const cartPage = new CartPage(page);
-    const paymentPage = new PaymentPage(page);
+    const contactUsPage = new ContactUsPage(page);
+    const aboutUsPage = new AboutUsPage(page);
 
     await signUpPage.open();
     await signUpPage.signUp('Test User', 'test@example.com', 'password123');
@@ -19,14 +17,14 @@ test.describe('POM smoke suite', () => {
     await loginPage.open();
     await loginPage.login('test@example.com', 'password123');
 
-    await dashboardPage.open();
-    await dashboardPage.assertLoaded();
+    await aboutUsPage.open();
+    await aboutUsPage.navigateToAbout();
+    await aboutUsPage.assertAboutPageLoaded();
 
-    await cartPage.open();
-    await cartPage.proceedToCheckout();
+    await contactUsPage.open();
+    await contactUsPage.navigateToContact();
+    await contactUsPage.assertContactPageLoaded();
 
-    await paymentPage.pay('4242424242424242', '12/30', '123');
-
-    await expect(page).toHaveURL(/.*(dashboard|cart|payment)/);
+    await expect(page).toHaveURL(/.*(about|contact)/);
   });
 });

@@ -8,15 +8,14 @@
       "coverage": [
         "Login flow",
         "Signup flow",
-        "Dashboard navigation",
-        "Cart operations",
-        "Payment checkout"
+        "About Us page",
+        "Contact Us page"
       ],
       "avg_runtime_seconds": 45,
       "tags": ["critical", "regression", "smoke", "must-run"],
       "dependencies": [],
       "historical_failure_rate": 0.02,
-      "last_updated": "2026-07-18",
+      "last_updated": "2026-07-19",
       "priority": "P0"
     },
     "login.spec.js": {
@@ -35,7 +34,7 @@
       "tags": ["auth", "critical", "regression"],
       "dependencies": [],
       "historical_failure_rate": 0.03,
-      "last_updated": "2026-07-18",
+      "last_updated": "2026-07-19",
       "priority": "P1"
     },
     "signup.spec.js": {
@@ -54,65 +53,45 @@
       "tags": ["auth", "regression", "user-flow"],
       "dependencies": [],
       "historical_failure_rate": 0.05,
-      "last_updated": "2026-07-18",
+      "last_updated": "2026-07-19",
       "priority": "P1"
     },
-    "dashboard.spec.js": {
-      "name": "Dashboard Module Tests",
-      "module": "dashboard",
+    "about-us.spec.js": {
+      "name": "About Us Page Tests",
+      "module": "content",
       "type": "functional",
-      "description": "Tests for dashboard navigation and user interactions",
+      "description": "Tests for About Us page content and navigation",
       "coverage": [
-        "Dashboard rendering",
-        "Navigation menu",
-        "User profile section",
-        "Recent activity",
-        "Settings access"
+        "About page navigation",
+        "Page loading",
+        "Company description display",
+        "Page heading verification"
       ],
-      "avg_runtime_seconds": 8,
-      "tags": ["dashboard", "navigation", "regression"],
-      "dependencies": ["login.spec.js"],
+      "avg_runtime_seconds": 10,
+      "tags": ["content", "pages", "navigation"],
+      "dependencies": [],
       "historical_failure_rate": 0.01,
-      "last_updated": "2026-07-18",
+      "last_updated": "2026-07-19",
       "priority": "P2"
     },
-    "cart.spec.js": {
-      "name": "Cart Module Tests",
-      "module": "cart",
+    "contact-us.spec.js": {
+      "name": "Contact Us Page Tests",
+      "module": "content",
       "type": "functional",
-      "description": "Tests for shopping cart functionality and operations",
+      "description": "Tests for Contact Us page and form functionality",
       "coverage": [
-        "Add to cart",
-        "Remove from cart",
-        "Quantity updates",
-        "Cart totals",
-        "Proceed to checkout"
+        "Contact page navigation",
+        "Page loading",
+        "Contact form visibility",
+        "Form field validation",
+        "Form submission"
       ],
-      "avg_runtime_seconds": 16,
-      "tags": ["cart", "ecommerce", "regression"],
-      "dependencies": ["login.spec.js"],
-      "historical_failure_rate": 0.04,
-      "last_updated": "2026-07-18",
-      "priority": "P1"
-    },
-    "payment.spec.js": {
-      "name": "Payment Module Tests",
-      "module": "payment",
-      "type": "functional",
-      "description": "Tests for payment processing and checkout flow",
-      "coverage": [
-        "Payment form",
-        "Card validation",
-        "Payment processing",
-        "Order confirmation",
-        "Receipt generation"
-      ],
-      "avg_runtime_seconds": 18,
-      "tags": ["payment", "critical", "regression", "ecommerce"],
-      "dependencies": ["login.spec.js", "cart.spec.js"],
-      "historical_failure_rate": 0.06,
-      "last_updated": "2026-07-18",
-      "priority": "P0"
+      "avg_runtime_seconds": 12,
+      "tags": ["content", "forms", "contact"],
+      "dependencies": [],
+      "historical_failure_rate": 0.02,
+      "last_updated": "2026-07-19",
+      "priority": "P2"
     }
   },
   "test_selection_rules": {
@@ -121,14 +100,14 @@
       "examples": [
         "tests impacted by modified modules",
         "authentication flow tests for auth changes",
-        "payment tests for payment module changes"
+        "content tests for page changes"
       ]
     },
     "tier_2_high_priority": {
       "description": "Tests in adjacent modules or shared dependencies",
       "examples": [
-        "cart tests when payment module changes",
-        "dashboard tests when auth changes",
+        "about-us tests when auth changes",
+        "contact-us tests when form validation changes",
         "integration tests spanning multiple modules"
       ]
     },
@@ -152,25 +131,17 @@
   "module_impact_map": {
     "auth": {
       "affected_tests": ["login.spec.js", "signup.spec.js"],
-      "dependent_tests": ["dashboard.spec.js", "cart.spec.js", "payment.spec.js"]
+      "dependent_tests": ["about-us.spec.js", "contact-us.spec.js"]
     },
-    "dashboard": {
-      "affected_tests": ["dashboard.spec.js"],
-      "dependent_tests": []
-    },
-    "cart": {
-      "affected_tests": ["cart.spec.js"],
-      "dependent_tests": ["payment.spec.js"]
-    },
-    "payment": {
-      "affected_tests": ["payment.spec.js"],
+    "content": {
+      "affected_tests": ["about-us.spec.js", "contact-us.spec.js"],
       "dependent_tests": []
     }
   },
   "selection_metrics": {
-    "total_tests": 6,
-    "total_runtime_full_suite_seconds": 113,
-    "avg_runtime_per_test_seconds": 18.8,
+    "total_tests": 5,
+    "total_runtime_full_suite_seconds": 93,
+    "avg_runtime_per_test_seconds": 18.6,
     "defect_detection_rate_target": 0.95,
     "false_negative_rate_target": 0.02,
     "runtime_budget_seconds": 300,
