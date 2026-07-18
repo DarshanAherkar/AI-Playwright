@@ -5,97 +5,138 @@ on:
     inputs:
       pr_number:
         description: Pull request number
-        required: false
+        required: true
         type: string
       pr_title:
         description: Pull request title
-        required: false
+        required: true
         type: string
       pr_url:
         description: Pull request URL
-        required: false
+        required: true
         type: string
       source_repo:
         description: Source repository
-        required: false
+        required: true
         type: string
       head_sha:
         description: Source commit SHA
-        required: false
+        required: true
         type: string
 
 jobs:
-  smart-test-selection:
-    name: Select Tests Using Smart Engine
-    runs-on: ubuntu-latest
-    outputs:
-      selected_tests: ${{ steps.select-tests.outputs.selected_tests }}
-      test_plan: ${{ steps.select-tests.outputs.test_plan }}
+  smart-test-run:
+    runs-on: self-hosted
+
+    permissions:
+      contents: read
+      pull-requests: read
+
     steps:
-      - name: Checkout repository
+      - name: Checkout tester repository
         uses: actions/checkout@v4
 
+      - name: Checkout smart engine repository
+        uses: actions/checkout@v4
+        with:
+          repository: DarshanAherkar/AI-Testing
+          path: engine-src
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Select tests using smart engine
+      - name: Install engine dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r engine-src/smart-test-engine/requirements.txt
+
+      - name: Fetch changed files from source PR
+        id: changed-files
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repo = os.environ['SOURCE_REPO']
+          token = os.environ.get('SOURCE_REPO_TOKEN', '')
+          pr_number = os.environ['PR_NUMBER']
+          url = f'https://api.github.com/repos/{repo}/pulls/{pr_number}/files?per_page=100'
+          changed = []
+          page = 1
+          headers = {'Accept': 'application/vnd.github+json'}
+          if token:
+              headers['Authorization'] = f'Bearer {token}'
+          while True:
+              page_url = f'{url}&page={page}'
+              request = urllib.request.Request(page_url, headers=headers)
+              with urllib.request.urlopen(request) as response:
+                  payload = json.loads(response.read().decode('utf-8'))
+              if not payload:
+                  break
+              changed.extend(item['filename'] for item in payload if item.get('filename'))
+              if len(payload) < 100:
+                  break
+              page += 1
+          output = ','.join(changed)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
+              stream.write(f'changed_files={output}\n')
+          PY
+        env:
+          SOURCE_REPO: ${{ github.event.inputs.source_repo }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          SOURCE_REPO_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
+
+      - name: Run smart selection engine
         id: select-tests
+        env:
+          PYTHONPATH: engine-src/smart-test-engine/src
         run: |
-          # Default: run smoke tests if no PR info provided
-          if [ -z "${{ github.event.inputs.source_repo }}" ]; then
-            echo "selected_tests=tests/pom-smoke.spec.js" >> $GITHUB_OUTPUT
-            echo "test_plan=Running default smoke test suite" >> $GITHUB_OUTPUT
-          else
-            # When smart test engine is available, it will select tests based on PR changes
-            echo "selected_tests=tests/pom-smoke.spec.js tests/login.spec.js tests/signup.spec.js" >> $GITHUB_OUTPUT
-            echo "test_plan=Selected tests based on PR impact analysis: pom-smoke, login, signup flows" >> $GITHUB_OUTPUT
-          fi
+          python -m engine.cli \
+            --pr-number "${{ github.event.inputs.pr_number }}" \
+            --title "${{ github.event.inputs.pr_title }}" \
+            --description "PR: ${{ github.event.inputs.pr_url }}" \
+            --changed-files "${{ steps.changed-files.outputs.changed_files }}" \
+            --catalog engine-src/smart-test-engine/data/test_catalog.json \
+            --output smart-test-plan.json
 
-  execute-smoke-tests:
-    name: Execute Selected Smoke Tests
-    needs: smart-test-selection
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Install Playwright browsers
-        run: npx playwright install
-
-      - name: Log test plan
+      - name: Build executable test list
+        id: plan
+        shell: bash
         run: |
-          echo "PR Number: ${{ github.event.inputs.pr_number }}"
-          echo "PR Title: ${{ github.event.inputs.pr_title }}"
-          echo "PR URL: ${{ github.event.inputs.pr_url }}"
-          echo "Source Repo: ${{ github.event.inputs.source_repo }}"
-          echo "Head SHA: ${{ github.event.inputs.head_sha }}"
-          echo "---"
-          echo "Test Plan: ${{ needs.smart-test-selection.outputs.test_plan }}"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
 
-      - name: Run selected smoke tests
+          plan = json.loads(Path('smart-test-plan.json').read_text(encoding='utf-8'))
+          tests = []
+          for bucket in ('must_run', 'high_priority', 'optional'):
+              for item in plan['execution_plan'].get(bucket, []):
+                  tests.extend(item.get('execution_targets', []))
+          unique_tests = list(dict.fromkeys(tests))
+          if not unique_tests:
+              unique_tests = ['tests/pom-smoke.spec.js']
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
+              stream.write('selected_tests=' + ' '.join(unique_tests) + '\n')
+          PY
+
+      - name: Install Playwright dependencies
         run: |
-          npx playwright test ${{ needs.smart-test-selection.outputs.selected_tests }}
+          npm install
+          npx playwright install
+
+      - name: Execute selected tests
+        run: |
+          npx playwright test ${{ steps.plan.outputs.selected_tests }}
 
       - name: Upload test report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: playwright-report/
           retention-days: 30
-
-      - name: Publish test results
-        if: always()
-        run: |
-          echo "Test execution completed"
-          echo "Selected tests: ${{ needs.smart-test-selection.outputs.selected_tests }}"
