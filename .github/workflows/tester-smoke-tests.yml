@@ -36,21 +36,15 @@ jobs:
       - name: Checkout tester repository
         uses: actions/checkout@v4
 
-      - name: Checkout smart engine repository
-        uses: actions/checkout@v4
-        with:
-          repository: DarshanAherkar/AI-Testing
-          path: engine-src
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install engine dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r engine-src/smart-test-engine/requirements.txt
+          pip install fastapi uvicorn httpx
 
       - name: Install and start Ollama
         shell: pwsh
@@ -79,45 +73,31 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
-          Write-Host "[ACTION] Checking Llama model availability..."
+          Write-Host "[ACTION] Pulling Llama model (if not already available)..."
           
           try {
-              $output = ollama list 2>&1
-              if ($output -like "*llama2*") {
-                  Write-Host "[OK] Llama model already available"
-              } else {
-                  Write-Host "[ACTION] Pulling Llama 3.1 model (this may take 10-30 minutes)..."
-                  ollama pull llama2
-                  Write-Host "[OK] Model ready"
-              }
+              ollama pull llama2
+              Write-Host "[OK] Llama model ready"
           } catch {
-              Write-Host "[WARN] Could not verify/pull model: $_"
-              Write-Host "      Falling back to file-based test selection"
+              Write-Host "[WARN] Could not pull model: $_"
           }
 
       - name: Start FastAPI server
         shell: pwsh
         run: |
-          $enginePath = "${{ github.workspace }}\engine-src\smart-test-engine\src"
-          
-          Write-Host "[ACTION] Starting FastAPI server from: $enginePath"
-          
-          if (-not (Test-Path $enginePath)) {
-              Write-Host "[WARN] Engine path not found: $enginePath"
-              exit 0
-          }
-          
           $pythonExe = (Get-Command python).Source
+          $serverScript = "${{ github.workspace }}\ollama-test-selector.py"
+          
+          Write-Host "[ACTION] Starting Ollama-based test selector..."
           
           # Start server in background using Start-Job
           $job = Start-Job -ScriptBlock {
-              param($python, $path)
-              Set-Location $path
-              & $python -m uvicorn cli:app --host 0.0.0.0 --port 8000 --log-level info
-          } -ArgumentList $pythonExe, $enginePath
+              param($python, $script)
+              & $python $script
+          } -ArgumentList $pythonExe, $serverScript
           
-          Write-Host "[OK] FastAPI server job started (ID: $($job.Id))"
-          Start-Sleep -Seconds 3
+          Write-Host "[OK] FastAPI server started (Job ID: $($job.Id))"
+          Start-Sleep -Seconds 2
         continue-on-error: true
 
       - name: Verify smart-test-engine availability
