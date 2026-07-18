@@ -193,6 +193,7 @@ jobs:
               "pr_title": os.environ.get("PR_TITLE", ""),
               "pr_description": os.environ.get("PR_URL", ""),
               "changed_files": changed_files,
+              "workspace": os.environ.get("GITHUB_WORKSPACE", os.getcwd()),
               "request_type": "smart_selection"
           }
           
