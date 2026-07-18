@@ -14,24 +14,55 @@ OLLAMA_URL = "http://localhost:11434"
 MODEL = "tinyllama"
 
 TEST_MAPPING = {
-    "login.page.js":    "tests/login.spec.js",
-    "signup.page.js":   "tests/signup.spec.js",
-    "about-us.page.js": "tests/about-us.spec.js",
+    # Page objects
+    "login.page.js":      "tests/login.spec.js",
+    "signup.page.js":     "tests/signup.spec.js",
+    "about-us.page.js":   "tests/about-us.spec.js",
     "contact-us.page.js": "tests/contact-us.spec.js",
-    "base.page.js":     "tests/pom-smoke.spec.js",
+    "base.page.js":       "tests/pom-smoke.spec.js",
+    # HTML files
+    "login.html":         "tests/login.spec.js",
+    "signup.html":        "tests/signup.spec.js",
+    "about-us.html":      "tests/about-us.spec.js",
+    "about.html":         "tests/about-us.spec.js",
+    "contact-us.html":    "tests/contact-us.spec.js",
+    "contact.html":       "tests/contact-us.spec.js",
 }
 
 ALL_TESTS = list(TEST_MAPPING.values()) + ["tests/pom-smoke.spec.js"]
 
 
+# Keyword-to-test mapping for fuzzy matching
+KEYWORD_MAPPING = {
+    "login":   "tests/login.spec.js",
+    "signin":  "tests/login.spec.js",
+    "signup":  "tests/signup.spec.js",
+    "register": "tests/signup.spec.js",
+    "about":   "tests/about-us.spec.js",
+    "contact": "tests/contact-us.spec.js",
+}
+
+
 def file_based_selection(changed_files):
-    """Select tests based on file-to-test mapping."""
+    """Select tests based on file-to-test mapping + keyword matching."""
     selected = set()
     for f in changed_files:
+        filename = f.split("/")[-1].lower()
+        matched = False
+        # Exact key match
         for key, test in TEST_MAPPING.items():
             if key in f:
                 selected.add(test)
-        if f.endswith(".html") or f.startswith("mock-app/"):
+                matched = True
+        # Keyword match on filename
+        if not matched:
+            for keyword, test in KEYWORD_MAPPING.items():
+                if keyword in filename:
+                    selected.add(test)
+                    matched = True
+                    break
+        # Generic HTML/CSS change → smoke
+        if not matched and (f.endswith(".html") or f.endswith(".css") or f.startswith("mock-app/")):
             selected.add("tests/pom-smoke.spec.js")
     return sorted(list(selected)) if selected else ["tests/pom-smoke.spec.js"]
 
