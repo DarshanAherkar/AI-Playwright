@@ -43,9 +43,7 @@ jobs:
           path: engine-src
 
       - name: Verify Python availability
-        shell: pwsh
-        run: |
-          python --version
+        run: python --version
 
       - name: Install engine dependencies
         run: |
