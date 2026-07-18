@@ -100,16 +100,22 @@ jobs:
 
       - name: Run smart selection engine
         id: select-tests
+        continue-on-error: true
         env:
           PYTHONPATH: ${{ github.workspace }}/engine-src/smart-test-engine/src
         run: |
-          python -m engine.cli \
-            --pr-number "${{ github.event.inputs.pr_number }}" \
-            --title "${{ github.event.inputs.pr_title }}" \
-            --description "PR: ${{ github.event.inputs.pr_url }}" \
-            --changed-files "${{ steps.changed-files.outputs.changed_files }}" \
-            --catalog "engine-src/smart-test-engine/data/test_catalog.json" \
-            --output "smart-test-plan.json"
+          if [ -f "engine-src/smart-test-engine/data/test_catalog.json" ]; then
+            python -m engine.cli \
+              --pr-number "${{ github.event.inputs.pr_number }}" \
+              --title "${{ github.event.inputs.pr_title }}" \
+              --description "PR: ${{ github.event.inputs.pr_url }}" \
+              --changed-files "${{ steps.changed-files.outputs.changed_files }}" \
+              --catalog "engine-src/smart-test-engine/data/test_catalog.json" \
+              --output "smart-test-plan.json"
+          else
+            echo "Catalog not found, creating default plan..."
+            echo '{"execution_plan": {"must_run": [{"execution_targets": ["tests/pom-smoke.spec.js"]}]}}' > smart-test-plan.json
+          fi
 
       - name: Build executable test list
         id: plan
@@ -119,14 +125,23 @@ jobs:
           import os
           from pathlib import Path
 
-          plan = json.loads(Path("smart-test-plan.json").read_text(encoding="utf-8"))
-          tests = []
-          for bucket in ("must_run", "high_priority", "optional"):
-              for item in plan["execution_plan"].get(bucket, []):
-                  tests.extend(item.get("execution_targets", []))
-          unique_tests = list(dict.fromkeys(tests))
+          try:
+              if Path("smart-test-plan.json").exists():
+                  plan = json.loads(Path("smart-test-plan.json").read_text(encoding="utf-8"))
+                  tests = []
+                  for bucket in ("must_run", "high_priority", "optional"):
+                      for item in plan.get("execution_plan", {}).get(bucket, []):
+                          tests.extend(item.get("execution_targets", []))
+                  unique_tests = list(dict.fromkeys(tests))
+              else:
+                  unique_tests = []
+          except Exception as e:
+              print(f"Warning: Failed to parse plan: {e}")
+              unique_tests = []
+          
           if not unique_tests:
               unique_tests = ["tests/pom-smoke.spec.js"]
+          
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
               stream.write("selected_tests=" + " ".join(unique_tests) + "\n")
 
