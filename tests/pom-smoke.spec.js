@@ -6,7 +6,7 @@ const { CartPage } = require('../src/pages/cart.page');
 const { PaymentPage } = require('../src/pages/payment.page');
 
 test.describe('POM smoke suite', () => {
-  test.skip('should open pages and create a basic flow', async ({ page }) => {
+  test('should open pages and create a basic flow', async ({ page }) => {
     const loginPage = new LoginPage(page);
     const signUpPage = new SignUpPage(page);
     const dashboardPage = new DashboardPage(page);
