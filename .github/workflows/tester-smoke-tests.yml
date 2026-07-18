@@ -46,58 +46,35 @@ jobs:
           python -m pip install --upgrade pip
           pip install fastapi uvicorn httpx
 
-      - name: Install and start Ollama
-        shell: pwsh
-        run: |
-          Write-Host "[ACTION] Setting up Ollama..."
-          $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
-          
-          if ($null -ne $ollamaCmd) {
-              Write-Host "[OK] Ollama already installed"
-          } else {
-              Write-Host "[WARN] Ollama not found in PATH. Please install from https://ollama.ai"
-              Write-Host "      After installation, restart the runner and try again."
-              exit 0
-          }
-          
-          Write-Host "[ACTION] Starting Ollama service..."
-          try {
-              Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden -ErrorAction SilentlyContinue
-              Start-Sleep -Seconds 3
-              Write-Host "[OK] Ollama service started"
-          } catch {
-              Write-Host "[WARN] Could not start Ollama service: $_"
-          }
-
-      - name: Pull TinyLlama model
-        shell: pwsh
+      - name: Verify Ollama is running
+        shell: powershell
         continue-on-error: true
         run: |
-          Write-Host "[ACTION] Pulling TinyLlama model (637 MB - much faster)..."
-          
+          Write-Host "[ACTION] Checking Ollama service..."
           try {
-              ollama pull tinyllama
-              Write-Host "[OK] TinyLlama model ready"
+              $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 5
+              Write-Host "[OK] Ollama is running"
           } catch {
-              Write-Host "[WARN] Could not pull model: $_"
+              Write-Host "[WARN] Ollama not responding. Make sure to run: ollama serve"
           }
 
       - name: Start FastAPI server
-        shell: pwsh
+        shell: powershell
         run: |
           $pythonExe = (Get-Command python).Source
           $serverScript = "${{ github.workspace }}\ollama-test-selector.py"
           
-          Write-Host "[ACTION] Starting Ollama-based test selector..."
+          Write-Host "[ACTION] Starting Smart Test Selector..."
           
           # Start server in background using Start-Job
           $job = Start-Job -ScriptBlock {
               param($python, $script)
-              & $python $script
+              & $python $script 8000
           } -ArgumentList $pythonExe, $serverScript
           
           Write-Host "[OK] FastAPI server started (Job ID: $($job.Id))"
-          Start-Sleep -Seconds 2
+          Start-Sleep -Seconds 1
+        continue-on-error: true
         continue-on-error: true
 
       - name: Verify smart-test-engine availability
