@@ -75,7 +75,6 @@ jobs:
           Write-Host "[OK] FastAPI server started (Job ID: $($job.Id))"
           Start-Sleep -Seconds 1
         continue-on-error: true
-        continue-on-error: true
 
       - name: Verify smart-test-engine availability
         shell: python
