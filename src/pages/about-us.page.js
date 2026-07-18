@@ -1,11 +1,12 @@
 const { BasePage } = require('./base.page');
+const { expect } = require('@playwright/test');
 
 class AboutUsPage extends BasePage {
   constructor(page) {
     super(page);
-    this.aboutButton = 'text=About';
+    this.aboutButton = 'text=About Us';
     this.aboutHeading = 'h1';
-    this.companyDescription = 'text=Company';
+    this.companyDescription = 'text=Who we are';
   }
 
   async open() {

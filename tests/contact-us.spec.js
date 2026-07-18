@@ -24,7 +24,7 @@ test.describe('Contact Us Page', () => {
     await contactUsPage.open();
     await contactUsPage.navigateToContact();
     await contactUsPage.fillContactForm('John Doe', 'john@example.com', 'Test message');
-    const nameField = page.locator('input[name="name"]');
+    const nameField = page.locator('input[placeholder="Enter your name"]');
     await expect(nameField).toHaveValue('John Doe');
   });
 

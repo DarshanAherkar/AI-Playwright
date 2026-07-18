@@ -12,9 +12,11 @@ test.describe('POM smoke suite', () => {
     const aboutUsPage = new AboutUsPage(page);
 
     await signUpPage.open();
+    await signUpPage.clickSignUpButton();
     await signUpPage.signUp('Test User', 'test@example.com', 'password123');
 
     await loginPage.open();
+    await loginPage.clickLoginButton();
     await loginPage.login('test@example.com', 'password123');
 
     await aboutUsPage.open();

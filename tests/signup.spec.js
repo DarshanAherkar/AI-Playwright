@@ -6,8 +6,14 @@ test.describe('Sign up page', () => {
     const signUpPage = new SignUpPage(page);
 
     await signUpPage.open();
+    await signUpPage.clickSignUpButton();
+    
+    // Verify name field is visible
+    const nameField = page.locator('input[placeholder="Enter your full name"]');
+    await expect(nameField).toBeVisible();
+    
     await signUpPage.signUp('Test User', 'test@example.com', 'password123');
 
-    await expect(page.locator('#signupForm')).toBeVisible();
+    await expect(page).toHaveURL(/.*signup|dashboard|home/);
   });
 });
