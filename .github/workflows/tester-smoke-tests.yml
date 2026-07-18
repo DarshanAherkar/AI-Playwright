@@ -42,10 +42,10 @@ jobs:
           repository: DarshanAherkar/AI-Testing
           path: engine-src
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Verify Python availability
+        shell: pwsh
+        run: |
+          python --version
 
       - name: Install engine dependencies
         run: |
@@ -54,37 +54,45 @@ jobs:
 
       - name: Fetch changed files from source PR
         id: changed-files
-        shell: bash
+        shell: python
         run: |
-          python - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
 
-          repo = os.environ['SOURCE_REPO']
-          token = os.environ.get('SOURCE_REPO_TOKEN', '')
-          pr_number = os.environ['PR_NUMBER']
-          url = f'https://api.github.com/repos/{repo}/pulls/{pr_number}/files?per_page=100'
+          repo = os.environ["SOURCE_REPO"]
+          token = os.environ.get("SOURCE_REPO_TOKEN", "")
+          pr_number = os.environ["PR_NUMBER"]
+          url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/files?per_page=100"
+
+          headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "smart-test-selection-runner"
+          }
+          if token:
+            headers["Authorization"] = f"Bearer {token}"
+
           changed = []
           page = 1
-          headers = {'Accept': 'application/vnd.github+json'}
-          if token:
-              headers['Authorization'] = f'Bearer {token}'
-          while True:
-              page_url = f'{url}&page={page}'
-              request = urllib.request.Request(page_url, headers=headers)
+          try:
+            while True:
+              request = urllib.request.Request(f"{url}&page={page}", headers=headers)
               with urllib.request.urlopen(request) as response:
-                  payload = json.loads(response.read().decode('utf-8'))
+                payload = json.loads(response.read().decode("utf-8"))
               if not payload:
-                  break
-              changed.extend(item['filename'] for item in payload if item.get('filename'))
+                break
+              changed.extend(item["filename"] for item in payload if item.get("filename"))
               if len(payload) < 100:
-                  break
+                break
               page += 1
-          output = ','.join(changed)
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
-              stream.write(f'changed_files={output}\n')
-          PY
+          except urllib.error.HTTPError as exc:
+            print(f"Warning: PR file fetch failed with HTTP {exc.code}; continuing with empty change list")
+          except Exception as exc:
+            print(f"Warning: PR file fetch failed ({exc}); continuing with empty change list")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+            stream.write(f"changed_files={','.join(changed)}\n")
         env:
           SOURCE_REPO: ${{ github.event.inputs.source_repo }}
           PR_NUMBER: ${{ github.event.inputs.pr_number }}
@@ -94,35 +102,37 @@ jobs:
         id: select-tests
         env:
           PYTHONPATH: engine-src/smart-test-engine/src
+        shell: python
         run: |
-          python -m engine.cli \
-            --pr-number "${{ github.event.inputs.pr_number }}" \
-            --title "${{ github.event.inputs.pr_title }}" \
-            --description "PR: ${{ github.event.inputs.pr_url }}" \
-            --changed-files "${{ steps.changed-files.outputs.changed_files }}" \
-            --catalog engine-src/smart-test-engine/data/test_catalog.json \
-            --output smart-test-plan.json
+          import subprocess
+          subprocess.run([
+              "python", "-m", "engine.cli",
+              "--pr-number", "${{ github.event.inputs.pr_number }}",
+              "--title", "${{ github.event.inputs.pr_title }}",
+              "--description", "PR: ${{ github.event.inputs.pr_url }}",
+              "--changed-files", "${{ steps.changed-files.outputs.changed_files }}",
+              "--catalog", "engine-src/smart-test-engine/data/test_catalog.json",
+              "--output", "smart-test-plan.json",
+          ], check=True)
 
       - name: Build executable test list
         id: plan
-        shell: bash
+        shell: python
         run: |
-          python - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          plan = json.loads(Path('smart-test-plan.json').read_text(encoding='utf-8'))
+          plan = json.loads(Path("smart-test-plan.json").read_text(encoding="utf-8"))
           tests = []
-          for bucket in ('must_run', 'high_priority', 'optional'):
-              for item in plan['execution_plan'].get(bucket, []):
-                  tests.extend(item.get('execution_targets', []))
+          for bucket in ("must_run", "high_priority", "optional"):
+              for item in plan["execution_plan"].get(bucket, []):
+                  tests.extend(item.get("execution_targets", []))
           unique_tests = list(dict.fromkeys(tests))
           if not unique_tests:
-              unique_tests = ['tests/pom-smoke.spec.js']
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
-              stream.write('selected_tests=' + ' '.join(unique_tests) + '\n')
-          PY
+              unique_tests = ["tests/pom-smoke.spec.js"]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+              stream.write("selected_tests=" + " ".join(unique_tests) + "\n")
 
       - name: Install Playwright dependencies
         run: |
