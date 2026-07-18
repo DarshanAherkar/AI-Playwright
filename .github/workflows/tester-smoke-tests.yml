@@ -32,10 +32,6 @@ jobs:
       contents: read
       pull-requests: read
 
-    defaults:
-      run:
-        shell: bash
-
     steps:
       - name: Checkout tester repository
         uses: actions/checkout@v4
