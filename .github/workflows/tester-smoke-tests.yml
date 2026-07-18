@@ -54,12 +54,14 @@ jobs:
 
       - name: Verify smart-test-engine availability
         shell: python
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           import urllib.request
           import urllib.error
           import time
           
-          print("🔍 Checking Smart Test Engine availability...")
+          print("Checking Smart Test Engine availability...")
           max_retries = 3
           
           for attempt in range(1, max_retries + 1):
@@ -70,19 +72,21 @@ jobs:
                       headers={"User-Agent": "smart-test-selection-runner"}
                   )
                   with urllib.request.urlopen(request, timeout=5) as response:
-                      print("✅ Smart Test Engine is available")
+                      print("[OK] Smart Test Engine is available")
                       break
               except Exception as e:
                   print(f"   Attempt {attempt}: Engine not yet available ({type(e).__name__})")
                   if attempt < max_retries:
                       time.sleep(2)
           else:
-              print("⚠️ Smart Test Engine not responding - will use fallback selection")
+              print("[WARN] Smart Test Engine not responding - will use fallback selection")
         continue-on-error: true
 
       - name: Fetch changed files from source PR
         id: changed-files
         shell: python
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           import json
           import os
@@ -130,6 +134,12 @@ jobs:
         id: select-tests
         continue-on-error: true
         shell: python
+        env:
+          PYTHONIOENCODING: utf-8
+          CHANGED_FILES: ${{ steps.changed-files.outputs.changed_files }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          PR_TITLE: ${{ github.event.inputs.pr_title }}
+          PR_URL: ${{ github.event.inputs.pr_url }}
         run: |
           import json
           import os
@@ -145,9 +155,9 @@ jobs:
           changed_files_str = os.environ.get("CHANGED_FILES", "")
           changed_files = [f.strip() for f in changed_files_str.split(",") if f.strip()]
           
-          print(f"\n📝 Changed files detected: {len(changed_files)}")
+          print(f"\n[INFO] Changed files detected: {len(changed_files)}")
           for f in changed_files[:5]:
-              print(f"   • {f}")
+              print(f"   - {f}")
           if len(changed_files) > 5:
               print(f"   ... and {len(changed_files) - 5} more")
           
@@ -166,7 +176,7 @@ jobs:
           explanations = []
           
           try:
-              print(f"\n🔍 Calling Smart Test Engine API: {api_url}")
+              print(f"\n[ACTION] Calling Smart Test Engine API: {api_url}")
               request_data = json.dumps(payload).encode('utf-8')
               request = urllib.request.Request(
                   api_url,
@@ -182,36 +192,40 @@ jobs:
               with urllib.request.urlopen(request, timeout=60) as response:
                   result = json.loads(response.read().decode("utf-8"))
                   
-                  print("\n✅ Smart Test Engine Response:")
+                  print("\n[OK] Smart Test Engine Response:")
                   print(f"   Status: {result.get('status', 'unknown')}")
                   
                   # Extract ML-ranked tests
                   selected_tests = result.get("selected_tests", [])
                   explanations = result.get("explanations", [])
                   
-                  print(f"\n🎯 ML-Ranked Test Selection ({len(selected_tests)} tests):")
+                  print(f"\n[RESULT] ML-Ranked Test Selection ({len(selected_tests)} tests):")
                   for i, test in enumerate(selected_tests, 1):
                       print(f"\n   {i}. {test}")
                       if i <= len(explanations):
                           exp = explanations[i-1]
-                          print(f"      Priority: {exp.get('priority_score', 'N/A'):.2f}/1.0")
+                          priority = exp.get('priority_score', 0)
+                          print(f"      Priority: {priority:.2f}/1.0")
                           print(f"      Evidence: {exp.get('evidence', 'No evidence')}")
                           print(f"      Reasoning: {exp.get('reasoning', 'No reasoning')}")
           
           except urllib.error.URLError as e:
-              print(f"\n⚠️  Smart Engine API unavailable ({e.reason})")
+              print(f"\n[WARN] Smart Engine API unavailable ({e.reason})")
               fallback_used = True
           except urllib.error.HTTPError as e:
-              print(f"\n⚠️  Smart Engine API error: HTTP {e.code}")
-              print(f"   Response: {e.read().decode('utf-8')}")
+              print(f"\n[WARN] Smart Engine API error: HTTP {e.code}")
+              try:
+                  print(f"   Response: {e.read().decode('utf-8')}")
+              except:
+                  pass
               fallback_used = True
           except Exception as e:
-              print(f"\n⚠️  Error calling Smart Engine: {type(e).__name__}: {e}")
+              print(f"\n[WARN] Error calling Smart Engine: {type(e).__name__}: {e}")
               fallback_used = True
           
           # Fallback to simple mapping if API unavailable
           if fallback_used or not selected_tests:
-              print("\n📋 Falling back to file-based test mapping:")
+              print("\n[FALLBACK] Using file-based test mapping:")
               file_to_test_map = {
                   "src/pages/login.page.js": "tests/login.spec.js",
                   "src/pages/signup.page.js": "tests/signup.spec.js",
@@ -225,40 +239,37 @@ jobs:
                   if changed_file in file_to_test_map:
                       test = file_to_test_map[changed_file]
                       selected_tests.add(test)
-                      print(f"   • {changed_file} → {test}")
+                      print(f"   - {changed_file} -> {test}")
                   elif changed_file.startswith("tests/") and changed_file.endswith(".spec.js"):
                       selected_tests.add(changed_file)
-                      print(f"   • {changed_file} (test file changed)")
+                      print(f"   - {changed_file} (test file changed)")
                   elif changed_file.startswith("src/"):
                       selected_tests.add("tests/pom-smoke.spec.js")
-                      print(f"   • {changed_file} → smoke test")
+                      print(f"   - {changed_file} -> smoke test")
               
               if not selected_tests:
                   selected_tests = {"tests/pom-smoke.spec.js"}
-                  print(f"   • Default: pom-smoke.spec.js")
+                  print(f"   - Default: pom-smoke.spec.js")
               
               selected_tests = sorted(list(selected_tests))
           
           print(f"\n{'='*80}")
-          print(f"📊 FINAL SELECTION: {len(selected_tests)} test(s)")
+          print(f"[SUMMARY] FINAL SELECTION: {len(selected_tests)} test(s)")
           for test in selected_tests:
-              print(f"   ✓ {test}")
+              print(f"   [+] {test}")
           print(f"{'='*80}\n")
           
           # Output for next step
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
               stream.write(f"selected_tests={' '.join(selected_tests)}\n")
               stream.write(f"fallback_mode={'true' if fallback_used else 'false'}\n")
-        
-        env:
-          CHANGED_FILES: ${{ steps.changed-files.outputs.changed_files }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
-          PR_TITLE: ${{ github.event.inputs.pr_title }}
-          PR_URL: ${{ github.event.inputs.pr_url }}
 
       - name: Build executable test list
         id: plan
         shell: python
+        env:
+          PYTHONIOENCODING: utf-8
+          SELECTED_TESTS: ${{ steps.select-tests.outputs.selected_tests }}
         run: |
           import os
           
@@ -270,9 +281,6 @@ jobs:
           
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
               stream.write("selected_tests=" + " ".join(selected_tests) + "\n")
-        
-        env:
-          SELECTED_TESTS: ${{ steps.select-tests.outputs.selected_tests }}
 
       - name: Install Playwright dependencies
         run: |
@@ -281,20 +289,26 @@ jobs:
 
       - name: Display test selection summary
         shell: python
+        env:
+          PYTHONIOENCODING: utf-8
+          FALLBACK_MODE: ${{ steps.select-tests.outputs.fallback_mode }}
+          SELECTED_TESTS: ${{ steps.plan.outputs.selected_tests }}
         run: |
-          fallback = "${{ steps.select-tests.outputs.fallback_mode }}" == "true"
-          selected = "${{ steps.plan.outputs.selected_tests }}".split()
+          import os
+          
+          fallback = os.environ.get("FALLBACK_MODE") == "true"
+          selected = os.environ.get("SELECTED_TESTS", "").split()
           
           print("\n" + "="*80)
-          print("📋 TEST EXECUTION SUMMARY")
+          print("TEST EXECUTION SUMMARY")
           print("="*80)
           
           if fallback:
-              print("\n🔄 Mode: File-Based Fallback (Smart Engine unavailable)")
+              print("\n[MODE] File-Based Fallback (Smart Engine unavailable)")
           else:
-              print("\n🤖 Mode: ML-Ranked Smart Selection (FAISS + Llama 3.1 + scikit-learn)")
+              print("\n[MODE] ML-Ranked Smart Selection (FAISS + Llama 3.1 + scikit-learn)")
           
-          print(f"\n📊 Tests to Execute ({len(selected)}):")
+          print(f"\n[TESTS] Tests to Execute ({len(selected)}):")
           for i, test in enumerate(selected, 1):
               print(f"   {i}. {test}")
           
