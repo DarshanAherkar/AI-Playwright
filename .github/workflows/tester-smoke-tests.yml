@@ -235,16 +235,23 @@ jobs:
               
               selected_tests = set()
               for changed_file in changed_files:
+                  # Exact page object mapping
                   if changed_file in file_to_test_map:
                       test = file_to_test_map[changed_file]
                       selected_tests.add(test)
                       print(f"   - {changed_file} -> {test}")
+                  # Direct test file changes
                   elif changed_file.startswith("tests/") and changed_file.endswith(".spec.js"):
                       selected_tests.add(changed_file)
-                      print(f"   - {changed_file} (test file changed)")
+                      print(f"   - {changed_file} (test file)")
+                  # Mock app HTML/CSS changes -> run smoke test (covers all pages)
+                  elif changed_file.startswith("mock-app/") and (changed_file.endswith(".html") or changed_file.endswith(".css")):
+                      selected_tests.add("tests/pom-smoke.spec.js")
+                      print(f"   - {changed_file} -> smoke test (UI changed)")
+                  # Other source file changes
                   elif changed_file.startswith("src/"):
                       selected_tests.add("tests/pom-smoke.spec.js")
-                      print(f"   - {changed_file} -> smoke test")
+                      print(f"   - {changed_file} -> smoke test (src changed)")
               
               if not selected_tests:
                   selected_tests = {"tests/pom-smoke.spec.js"}
