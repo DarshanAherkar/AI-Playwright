@@ -42,11 +42,10 @@ def get_ollama_suggestion(changed_files, pr_title):
     changed_str = ", ".join(changed_files) if changed_files else "(no files)"
 
     prompt = (
-        f"You are a test selection assistant. "
-        f"Changed files: {changed_str}. "
-        f"PR title: {pr_title}. "
-        f"Available tests: {all_tests_str}. "
-        f"Reply with ONLY the relevant test file names, comma-separated, no explanation."
+        f"Files changed: {changed_str}. "
+        f"PR: {pr_title}. "
+        f"Pick tests from this list only: {all_tests_str}. "
+        f"Output only the exact test filenames from the list above, one per line."
     )
 
     payload = json.dumps({"model": MODEL, "prompt": prompt, "stream": False}).encode("utf-8")
@@ -60,8 +59,12 @@ def get_ollama_suggestion(changed_files, pr_title):
     with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read().decode("utf-8"))
         raw = result.get("response", "").strip()
-        tests = [t.strip() for t in raw.replace("\n", ",").split(",") if "tests/" in t and ".spec.js" in t]
-        return tests if tests else None
+        # Extract only valid test paths matching known pattern
+        import re
+        tests = re.findall(r'tests/[\w-]+\.spec\.js', raw)
+        # Filter to only tests that actually exist in our list
+        valid = [t for t in tests if t in ALL_TESTS]
+        return valid if valid else None
 
 
 def select_tests(changed_files, pr_title):
@@ -120,7 +123,12 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    print(f"[OK] Ollama Smart Test Selector running on port {port}")
-    print(f"[OK] Model: {MODEL} | Ollama: {OLLAMA_URL}")
-    server = HTTPServer(("0.0.0.0", port), Handler)
-    server.serve_forever()
+    try:
+        server = HTTPServer(("0.0.0.0", port), Handler)
+        print(f"[OK] Ollama Smart Test Selector running on port {port}")
+        print(f"[OK] Model: {MODEL} | Ollama: {OLLAMA_URL}")
+        server.serve_forever()
+    except OSError as e:
+        print(f"[ERROR] Cannot bind to port {port}: {e}")
+        print(f"[ERROR] Kill existing process: netstat -ano | findstr :{port}")
+        sys.exit(1)
