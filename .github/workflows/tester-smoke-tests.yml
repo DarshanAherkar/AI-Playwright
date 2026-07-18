@@ -42,8 +42,10 @@ jobs:
           repository: DarshanAherkar/AI-Testing
           path: engine-src
 
-      - name: Verify Python availability
-        run: python --version
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Install engine dependencies
         run: |
