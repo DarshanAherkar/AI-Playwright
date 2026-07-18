@@ -87,6 +87,9 @@ jobs:
         shell: python
         env:
           PYTHONIOENCODING: utf-8
+          SOURCE_REPO: ${{ github.event.inputs.source_repo }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          SOURCE_REPO_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
         run: |
           import json
           import os
@@ -125,10 +128,6 @@ jobs:
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
             stream.write(f"changed_files={','.join(changed)}\n")
-        env:
-          SOURCE_REPO: ${{ github.event.inputs.source_repo }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
-          SOURCE_REPO_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
 
       - name: Run smart selection engine
         id: select-tests
