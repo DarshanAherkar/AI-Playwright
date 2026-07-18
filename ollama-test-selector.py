@@ -28,12 +28,23 @@ import urllib.request
 OLLAMA_URL = "http://localhost:11434"
 MODEL = "tinyllama"
 THRESHOLD = 0.15   # minimum ML score to include a test
+RELATIVE_CUTOFF = 0.50  # must score >= 50% of top scorer
+
+# Playwright boilerplate tokens to ignore in TF-IDF
+STOPWORDS = {
+    "test", "expect", "page", "describe", "async", "await", "const", "let",
+    "return", "from", "import", "require", "toBe", "toBeVisible", "toHaveURL",
+    "goto", "click", "fill", "locator", "getByText", "getByRole",
+    "beforeEach", "afterEach", "browser", "context", "true", "false",
+    "js", "spec", "tests", "src", "pages"
+}
 
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 
 def tokenize(text):
-    return re.findall(r'[a-z0-9]+', text.lower())
+    tokens = re.findall(r'[a-z][a-z0-9]+', text.lower())
+    return [t for t in tokens if t not in STOPWORDS and len(t) > 2]
 
 
 def discover_tests(workspace):
@@ -47,16 +58,39 @@ def discover_tests(workspace):
     )
 
 
+def extract_meaningful_tokens(content, test_name):
+    """
+    Extract only meaningful tokens from test files:
+    - describe() block names (domain context)
+    - test() names (what is being tested)
+    - Imported page object names
+    - Page method call names
+    Ignores Playwright boilerplate that is identical across all tests.
+    """
+    tokens = []
+    # test/describe labels - most informative
+    tokens += re.findall(r'(?:describe|test)\([\'"]([^\'"]+)[\'"]', content)
+    # import paths e.g. './login.page'
+    tokens += re.findall(r'[\'"]\./([\w-]+)\.page', content)
+    # page object variable usage e.g. loginPage.xxx
+    tokens += re.findall(r'(\w+Page)\.(\w+)', content)
+    # test file stem itself
+    stem = re.sub(r'tests/|\.spec\.js', '', test_name)
+    tokens.append(stem)
+    return " ".join(str(t) for t in tokens)
+
+
 def read_test_contents(workspace, tests):
-    """Read each test file's source for semantic analysis."""
+    """Read each test file and extract meaningful tokens only."""
     contents = {}
     for test in tests:
         path = os.path.join(workspace, test)
         try:
             with open(path, encoding="utf-8") as fh:
-                contents[test] = fh.read()
+                raw = fh.read()
+            contents[test] = extract_meaningful_tokens(raw, test)
         except Exception:
-            contents[test] = test
+            contents[test] = re.sub(r'tests/|\.spec\.js', '', test)
     return contents
 
 
@@ -171,12 +205,16 @@ def llm_validate(changed_files, pr_title, candidates, available_tests):
     all_tests_str = "\n".join(f"  - {t}" for t in available_tests)
 
     prompt = (
-        "You are a test selection assistant.\n"
+        "You are a precise test selection assistant. Be selective - run minimal tests.\n"
         f"Changed files:\n{changed_str}\n"
         f"PR title: {pr_title}\n\n"
-        f"ML pre-selected candidates:\n{candidates_str}\n\n"
+        f"ML pre-selected candidates (by relevance score):\n{candidates_str}\n\n"
         f"All available tests:\n{all_tests_str}\n\n"
-        "Task: Confirm or adjust the candidate list. Output ONLY test filenames, one per line."
+        "Rules:\n"
+        "- Only confirm tests DIRECTLY related to the changed files\n"
+        "- Do NOT add unrelated tests\n"
+        "- If only login changed, only confirm login test\n"
+        "Output ONLY the confirmed test filenames, one per line, nothing else.\n"
     )
 
     payload = json.dumps({"model": MODEL, "prompt": prompt, "stream": False}).encode("utf-8")
@@ -220,11 +258,15 @@ def select_tests(changed_files, pr_title, workspace):
     for t, v in list(ml_scores.items())[:5]:
         print(f"  ML  {v['score']:.4f} | {t} | {v['features']}")
 
-    # Filter by threshold
+    # Filter by RELATIVE threshold: must score >= 50% of top scorer
+    best = max((v["score"] for v in ml_scores.values()), default=0)
+    cutoff = max(THRESHOLD, best * RELATIVE_CUTOFF)
+    print(f"[ML] Best score: {best:.4f} | Cutoff: {cutoff:.4f}")
+
     candidates = [
         {"test": t, "score": v["score"], "features": v["features"]}
         for t, v in ml_scores.items()
-        if v["score"] >= THRESHOLD
+        if v["score"] >= cutoff
     ]
 
     if not candidates:
