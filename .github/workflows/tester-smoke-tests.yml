@@ -103,19 +103,20 @@ jobs:
         continue-on-error: true
         env:
           PYTHONPATH: ${{ github.workspace }}/engine-src/smart-test-engine/src
+        shell: pwsh
         run: |
-          if [ -f "engine-src/smart-test-engine/data/test_catalog.json" ]; then
-            python -m engine.cli \
-              --pr-number "${{ github.event.inputs.pr_number }}" \
-              --title "${{ github.event.inputs.pr_title }}" \
-              --description "PR: ${{ github.event.inputs.pr_url }}" \
-              --changed-files "${{ steps.changed-files.outputs.changed_files }}" \
-              --catalog "engine-src/smart-test-engine/data/test_catalog.json" \
+          if (Test-Path "engine-src/smart-test-engine/data/test_catalog.json") {
+            python -m engine.cli `
+              --pr-number "${{ github.event.inputs.pr_number }}" `
+              --title "${{ github.event.inputs.pr_title }}" `
+              --description "PR: ${{ github.event.inputs.pr_url }}" `
+              --changed-files "${{ steps.changed-files.outputs.changed_files }}" `
+              --catalog "engine-src/smart-test-engine/data/test_catalog.json" `
               --output "smart-test-plan.json"
-          else
-            echo "Catalog not found, creating default plan..."
-            echo '{"execution_plan": {"must_run": [{"execution_targets": ["tests/pom-smoke.spec.js"]}]}}' > smart-test-plan.json
-          fi
+          } else {
+            Write-Host "Catalog not found, creating default plan..."
+            @{"execution_plan"=@{"must_run"=@(@{"execution_targets"=@("tests/pom-smoke.spec.js")})}} | ConvertTo-Json | Out-File -FilePath "smart-test-plan.json"
+          }
 
       - name: Build executable test list
         id: plan
