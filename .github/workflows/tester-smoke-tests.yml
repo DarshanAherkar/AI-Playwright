@@ -52,6 +52,74 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r engine-src/smart-test-engine/requirements.txt
 
+      - name: Install and start Ollama
+        shell: pwsh
+        run: |
+          Write-Host "[ACTION] Setting up Ollama..."
+          $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
+          
+          if ($null -ne $ollamaCmd) {
+              Write-Host "[OK] Ollama already installed"
+          } else {
+              Write-Host "[WARN] Ollama not found in PATH. Please install from https://ollama.ai"
+              Write-Host "      After installation, restart the runner and try again."
+              exit 0
+          }
+          
+          Write-Host "[ACTION] Starting Ollama service..."
+          try {
+              Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 3
+              Write-Host "[OK] Ollama service started"
+          } catch {
+              Write-Host "[WARN] Could not start Ollama service: $_"
+          }
+
+      - name: Pull Llama model
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Write-Host "[ACTION] Checking Llama model availability..."
+          
+          try {
+              $output = ollama list 2>&1
+              if ($output -like "*llama2*") {
+                  Write-Host "[OK] Llama model already available"
+              } else {
+                  Write-Host "[ACTION] Pulling Llama 3.1 model (this may take 10-30 minutes)..."
+                  ollama pull llama2
+                  Write-Host "[OK] Model ready"
+              }
+          } catch {
+              Write-Host "[WARN] Could not verify/pull model: $_"
+              Write-Host "      Falling back to file-based test selection"
+          }
+
+      - name: Start FastAPI server
+        shell: pwsh
+        run: |
+          $enginePath = "${{ github.workspace }}\engine-src\smart-test-engine\src"
+          
+          Write-Host "[ACTION] Starting FastAPI server from: $enginePath"
+          
+          if (-not (Test-Path $enginePath)) {
+              Write-Host "[WARN] Engine path not found: $enginePath"
+              exit 0
+          }
+          
+          $pythonExe = (Get-Command python).Source
+          
+          # Start server in background using Start-Job
+          $job = Start-Job -ScriptBlock {
+              param($python, $path)
+              Set-Location $path
+              & $python -m uvicorn cli:app --host 0.0.0.0 --port 8000 --log-level info
+          } -ArgumentList $pythonExe, $enginePath
+          
+          Write-Host "[OK] FastAPI server job started (ID: $($job.Id))"
+          Start-Sleep -Seconds 3
+        continue-on-error: true
+
       - name: Verify smart-test-engine availability
         shell: python
         env:
@@ -61,8 +129,9 @@ jobs:
           import urllib.error
           import time
           
-          print("Checking Smart Test Engine availability...")
-          max_retries = 3
+          print("[ACTION] Verifying Smart Test Engine availability...")
+          max_retries = 10
+          retry_delay = 3
           
           for attempt in range(1, max_retries + 1):
               try:
@@ -72,14 +141,17 @@ jobs:
                       headers={"User-Agent": "smart-test-selection-runner"}
                   )
                   with urllib.request.urlopen(request, timeout=5) as response:
-                      print("[OK] Smart Test Engine is available")
+                      result = response.read().decode("utf-8")
+                      print(f"[OK] Smart Test Engine is running and healthy")
                       break
               except Exception as e:
-                  print(f"   Attempt {attempt}: Engine not yet available ({type(e).__name__})")
                   if attempt < max_retries:
-                      time.sleep(2)
-          else:
-              print("[WARN] Smart Test Engine not responding - will use fallback selection")
+                      print(f"   Attempt {attempt}/{max_retries}: Waiting for engine... ({type(e).__name__})")
+                      time.sleep(retry_delay)
+                  else:
+                      print(f"[WARN] Smart Test Engine not responding after {max_retries} attempts")
+                      print(f"   Error: {type(e).__name__}: {e}")
+                      print(f"   Will use fallback file-based test selection")
         continue-on-error: true
 
       - name: Fetch changed files from source PR
