@@ -434,13 +434,17 @@ jobs:
           import sys
           import os
 
+          workspace = os.environ.get("GITHUB_WORKSPACE", os.getcwd())
+          os.chdir(workspace)
+
           is_regression = (os.environ.get("IS_REGRESSION_INPUT", "false").lower() == "true" or
                           os.environ.get("IS_SCHEDULE", "false").lower() == "true")
           cache_hit = os.environ.get("CACHE_HIT", "false").lower() == "true"
-          cache_file = os.path.join("test-results", "regression-cache", "latest-full-suite.json")
+          cache_file = os.path.join(workspace, "test-results", "regression-cache", "latest-full-suite.json")
           cache_file_exists = os.path.exists(cache_file)
           
           print("\n" + "="*80)
+          print(f"[INFO] Workspace: {workspace}")
           print(f"[INFO] Regression: {is_regression}, Cache Hit: {cache_hit}, Baseline File: {cache_file_exists}")
           print("="*80 + "\n")
           
@@ -456,23 +460,45 @@ jobs:
             # NORMAL PR WITHOUT CACHE: Initialize cache first
             print("[MODE] FIRST RUN: Initializing cache...")
             init_cmd = [sys.executable, "scripts/generate_comparison_report.py", "--regression"]
-            init_result = subprocess.run(init_cmd, check=False)
+            init_result = subprocess.run(init_cmd, check=False, cwd=workspace)
             
             if init_result.returncode == 0:
-              print("[SUCCESS] Cache initialized")
+              if os.path.exists(cache_file):
+                print("[SUCCESS] Cache initialized")
+              else:
+                print(f"[ERROR] Regression finished but baseline file missing: {cache_file}")
+                sys.exit(1)
               # Now run comparison
               command = [sys.executable, "scripts/generate_comparison_report.py"]
             else:
               print("[ERROR] Cache init failed")
               sys.exit(1)
           
-          subprocess.run(command, check=False)
+          subprocess.run(command, check=False, cwd=workspace)
+
+      - name: Debug cache files
+        if: always()
+        shell: python
+        run: |
+          from pathlib import Path
+          import os
+
+          workspace = Path(os.environ.get("GITHUB_WORKSPACE", "."))
+          cache_dir = workspace / "test-results" / "regression-cache"
+          cache_file = cache_dir / "latest-full-suite.json"
+
+          print(f"[INFO] cache_dir exists: {cache_dir.exists()} -> {cache_dir}")
+          print(f"[INFO] cache_file exists: {cache_file.exists()} -> {cache_file}")
+          if cache_dir.exists():
+            print("[INFO] cache_dir contents:")
+            for item in sorted(cache_dir.glob("*")):
+              print(f"  - {item.name}")
 
       - name: Save full suite cache (for next runs)
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: test-results/regression-cache/
+          path: ${{ github.workspace }}/test-results/regression-cache/
           key: full-suite-regression-cache
 
       - name: Upload comparison report
