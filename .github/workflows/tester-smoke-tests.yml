@@ -401,6 +401,27 @@ jobs:
         run: |
           npx playwright test ${{ steps.plan.outputs.selected_tests }}
 
+      - name: Generate comparison report (smart subset vs full suite)
+        if: always()
+        shell: python
+        env:
+          PYTHONIOENCODING: utf-8
+          SELECTED_TESTS: ${{ steps.plan.outputs.selected_tests }}
+        run: |
+          import subprocess
+          import sys
+
+          command = [sys.executable, "scripts/generate_comparison_report.py"]
+          subprocess.run(command, check=False)
+
+      - name: Upload comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-selection-comparison-report
+          path: comparison-report/
+          retention-days: 30
+
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4

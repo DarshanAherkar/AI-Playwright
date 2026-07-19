@@ -1,0 +1,20 @@
+{
+  "module_risk": {
+    "auth": 0.9,
+    "content": 0.5,
+    "core": 0.7
+  },
+  "module_owners": {
+    "auth": ["team-auth"],
+    "content": ["team-content"],
+    "core": ["team-core"]
+  },
+  "file_owners": {
+    "src/pages/login": ["team-auth"],
+    "src/pages/signup": ["team-auth"],
+    "src/pages/about": ["team-content"],
+    "src/pages/contact": ["team-content"],
+    "mock-app/": ["team-ui"],
+    "tests/": ["team-quality"]
+  }
+}
