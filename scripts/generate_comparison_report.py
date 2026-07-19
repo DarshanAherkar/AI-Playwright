@@ -8,7 +8,9 @@ from pathlib import Path
 from datetime import datetime
 
 
-FULL_SUITE_CACHE_DIR = Path("test-results/regression-cache")
+# Keep regression baseline outside Playwright's default output folders.
+# Playwright clears `test-results` between runs, which would wipe the cache.
+FULL_SUITE_CACHE_DIR = Path(".ci-cache/full-suite-regression")
 
 
 def run_playwright(command):

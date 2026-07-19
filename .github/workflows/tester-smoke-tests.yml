@@ -415,7 +415,7 @@ jobs:
         id: cache-restore
         uses: actions/cache@v4
         with:
-          path: test-results/regression-cache/
+          path: .ci-cache/full-suite-regression/
           key: full-suite-regression-cache
           restore-keys: |
             full-suite-regression-cache
@@ -440,7 +440,7 @@ jobs:
           is_regression = (os.environ.get("IS_REGRESSION_INPUT", "false").lower() == "true" or
                           os.environ.get("IS_SCHEDULE", "false").lower() == "true")
           cache_hit = os.environ.get("CACHE_HIT", "false").lower() == "true"
-          cache_file = os.path.join(workspace, "test-results", "regression-cache", "latest-full-suite.json")
+          cache_file = os.path.join(workspace, ".ci-cache", "full-suite-regression", "latest-full-suite.json")
           cache_file_exists = os.path.exists(cache_file)
           
           print("\n" + "="*80)
@@ -484,7 +484,7 @@ jobs:
           import os
 
           workspace = Path(os.environ.get("GITHUB_WORKSPACE", "."))
-          cache_dir = workspace / "test-results" / "regression-cache"
+          cache_dir = workspace / ".ci-cache" / "full-suite-regression"
           cache_file = cache_dir / "latest-full-suite.json"
 
           print(f"[INFO] cache_dir exists: {cache_dir.exists()} -> {cache_dir}")
@@ -498,7 +498,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/test-results/regression-cache/
+          path: ${{ github.workspace }}/.ci-cache/full-suite-regression/
           key: full-suite-regression-cache
 
       - name: Upload comparison report
@@ -548,7 +548,7 @@ jobs:
       - name: Restore cache (if exists)
         uses: actions/cache@v4
         with:
-          path: test-results/regression-cache/
+          path: .ci-cache/full-suite-regression/
           key: full-suite-regression-cache
           restore-keys: |
             full-suite-regression-cache
@@ -581,7 +581,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: test-results/regression-cache/
+          path: .ci-cache/full-suite-regression/
           key: full-suite-regression-cache
 
       - name: Upload regression report
