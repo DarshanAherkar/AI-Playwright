@@ -68,12 +68,12 @@ jobs:
           $listeners = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
           if ($listeners) {
             $pids = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
-            foreach ($pid in $pids) {
+            foreach ($procId in $pids) {
               try {
-                Stop-Process -Id $pid -Force -ErrorAction Stop
-                Write-Host "[OK] Stopped stale process PID: $pid"
+                Stop-Process -Id $procId -Force -ErrorAction Stop
+                Write-Host "[OK] Stopped stale process PID: $procId"
               } catch {
-                Write-Host "[WARN] Failed to stop PID ${pid}: $($_.Exception.Message)"
+                Write-Host "[WARN] Failed to stop PID ${procId}: $($_.Exception.Message)"
               }
             }
           } else {
