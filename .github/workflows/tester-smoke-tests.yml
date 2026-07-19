@@ -200,7 +200,7 @@ jobs:
           import urllib.request
 
           print("=" * 80)
-          print("SMART TEST SELECTION ENGINE - scikit-learn Ranking")
+          print("SMART TEST SELECTION ENGINE - scikit-learn + Historical RAG")
           print("=" * 80)
 
           changed_files_str = os.environ.get("CHANGED_FILES", "")
@@ -389,7 +389,7 @@ jobs:
           if fallback:
               print("\n[MODE] File-Based Fallback (Smart Engine unavailable)")
           else:
-              print("\n[MODE] ML-Ranked Smart Selection (scikit-learn + TinyLlama)")
+              print("\n[MODE] ML-Ranked Smart Selection (scikit-learn + RAG + TinyLlama)")
           
           print(f"\n[TESTS] Tests to Execute ({len(selected)}):")
           for i, test in enumerate(selected, 1):

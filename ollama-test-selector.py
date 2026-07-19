@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-Smart Test Selector: scikit-learn + LLM Pipeline
+Smart Test Selector: scikit-learn + RAG + LLM Pipeline
 ─────────────────────────────────────────────
 Layer 1 - ML (Ranking):
     scikit-learn Logistic Regression
-    Features: token overlap, content overlap, path hints, change scope
+    Features: token overlap, content overlap, path hints, change scope, RAG signals
 
-Layer 2 - LLM (Reasoning):
+Layer 2 - RAG (Historical Retrieval):
+    Retrieves similar historical PRs using TF-IDF cosine similarity
+    Adds failure/selection evidence for impacted tests
+
+Layer 3 - LLM (Reasoning):
   TinyLlama validates ML candidates and explains the selection
 
 Fully dynamic - no hardcoded mappings.
@@ -19,13 +23,16 @@ import re
 import sys
 import urllib.request
 
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics.pairwise import cosine_similarity
 
 OLLAMA_URL = "http://localhost:11434"
 MODEL = "tinyllama"
 THRESHOLD = 0.15   # minimum ML score to include a test
 RELATIVE_CUTOFF = 0.50  # must score >= 50% of top scorer
 MAX_LLM_CANDIDATES = 3  # LLM can only validate the top-N ML candidates
+RAG_TOP_K = 5
 
 # Playwright boilerplate tokens to ignore in TF-IDF
 STOPWORDS = {
@@ -53,6 +60,51 @@ def discover_tests(workspace):
         f"tests/{f}" for f in os.listdir(tests_dir)
         if f.endswith(".spec.js")
     )
+
+
+def normalize_test_name(test_name):
+    if not test_name:
+        return None
+    name = str(test_name).strip()
+    if not name:
+        return None
+    if name.startswith("tests/"):
+        return name
+    if name.endswith(".spec.js"):
+        return f"tests/{name}"
+    return None
+
+
+def load_historical_records(workspace):
+    """Load historical PR execution records for RAG retrieval."""
+    records = []
+
+    history_path = os.path.join(workspace, "historical-pr-data.json")
+    if os.path.isfile(history_path):
+        try:
+            with open(history_path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+            records.extend(payload.get("records", []))
+        except Exception as exc:
+            print(f"[WARN] Could not load historical-pr-data.json: {exc}")
+
+    metadata_path = os.path.join(workspace, "test-metadata.json")
+    if os.path.isfile(metadata_path):
+        try:
+            with open(metadata_path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+            records.extend(payload.get("historical_pr_runs", []))
+        except Exception as exc:
+            print(f"[WARN] Could not load historical_pr_runs from test-metadata.json: {exc}")
+
+    cleaned = []
+    for record in records:
+        selected = [normalize_test_name(t) for t in record.get("selected_tests", [])]
+        failed = [normalize_test_name(t) for t in record.get("failed_tests", [])]
+        record["selected_tests"] = [t for t in selected if t]
+        record["failed_tests"] = [t for t in failed if t]
+        cleaned.append(record)
+    return cleaned
 
 
 def extract_meaningful_tokens(content, test_name):
@@ -91,7 +143,104 @@ def read_test_contents(workspace, tests):
     return contents
 
 
-def build_features(changed_files, test, test_contents):
+def record_to_text(record):
+    changed_files = " ".join(record.get("changed_files", []))
+    selected_tests = " ".join(record.get("selected_tests", []))
+    failed_tests = " ".join(record.get("failed_tests", []))
+    tags = " ".join(record.get("tags", []))
+    return " ".join([
+        str(record.get("pr_title", "")),
+        str(record.get("summary", "")),
+        changed_files,
+        selected_tests,
+        failed_tests,
+        tags,
+    ])
+
+
+def retrieve_historical_context(changed_files, pr_title, historical_records):
+    """RAG retrieval over historical PR records using TF-IDF cosine similarity."""
+    if not historical_records:
+        return {"top_records": [], "test_signals": {}, "total_similarity": 0.0}
+
+    query = " ".join([pr_title, " ".join(changed_files)]).strip()
+    corpus = [record_to_text(record) for record in historical_records]
+
+    try:
+        vectorizer = TfidfVectorizer(token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z0-9_-]+\b")
+        matrix = vectorizer.fit_transform(corpus + [query])
+        similarities = cosine_similarity(matrix[-1], matrix[:-1])[0]
+    except Exception as exc:
+        print(f"[WARN] Historical RAG retrieval failed: {exc}")
+        return {"top_records": [], "test_signals": {}, "total_similarity": 0.0}
+
+    ranked_indices = sorted(range(len(similarities)), key=lambda i: similarities[i], reverse=True)
+    top_records = []
+    test_signals = {}
+    total_similarity = 0.0
+
+    for idx in ranked_indices[:RAG_TOP_K]:
+        sim = float(similarities[idx])
+        if sim <= 0:
+            continue
+        record = historical_records[idx]
+        total_similarity += sim
+
+        top_records.append({
+            "pr_id": record.get("pr_id", "n/a"),
+            "pr_title": record.get("pr_title", ""),
+            "similarity": round(sim, 4),
+            "selected_tests": record.get("selected_tests", []),
+            "failed_tests": record.get("failed_tests", []),
+        })
+
+        for test in record.get("selected_tests", []):
+            signal = test_signals.setdefault(test, {
+                "selection_sum": 0.0,
+                "failure_sum": 0.0,
+                "max_similarity": 0.0,
+                "hits": 0,
+            })
+            signal["selection_sum"] += sim
+            signal["max_similarity"] = max(signal["max_similarity"], sim)
+            signal["hits"] += 1
+
+        for test in record.get("failed_tests", []):
+            signal = test_signals.setdefault(test, {
+                "selection_sum": 0.0,
+                "failure_sum": 0.0,
+                "max_similarity": 0.0,
+                "hits": 0,
+            })
+            signal["failure_sum"] += sim
+            signal["max_similarity"] = max(signal["max_similarity"], sim)
+            signal["hits"] += 1
+
+    return {
+        "top_records": top_records,
+        "test_signals": test_signals,
+        "total_similarity": total_similarity,
+    }
+
+
+def build_rag_evidence_lines(candidate_tests, rag_context):
+    lines = []
+    signals = rag_context.get("test_signals", {})
+    total_similarity = rag_context.get("total_similarity", 0.0)
+    denom = total_similarity if total_similarity > 0 else 1.0
+
+    for test in candidate_tests:
+        signal = signals.get(test, {})
+        rag_select = signal.get("selection_sum", 0.0) / denom
+        rag_fail = signal.get("failure_sum", 0.0) / denom
+        rag_sim = signal.get("max_similarity", 0.0)
+        lines.append(
+            f"- {test}: hist_select={rag_select:.3f}, hist_fail={rag_fail:.3f}, best_sim={rag_sim:.3f}"
+        )
+    return lines
+
+
+def build_features(changed_files, test, test_contents, rag_context):
     """Create numeric features for one (PR change set, test) pair."""
     changed_text = " ".join(changed_files)
     changed_tokens = set(tokenize(changed_text))
@@ -112,6 +261,13 @@ def build_features(changed_files, test, test_contents):
     depth_norm = min(1.0, avg_depth / 5)
     changed_count_norm = min(1.0, len(changed_files) / 20)
 
+    test_signal = rag_context.get("test_signals", {}).get(test, {})
+    total_similarity = rag_context.get("total_similarity", 0.0)
+    denom = total_similarity if total_similarity > 0 else 1.0
+    rag_selection = test_signal.get("selection_sum", 0.0) / denom
+    rag_failure = test_signal.get("failure_sum", 0.0) / denom
+    rag_similarity = test_signal.get("max_similarity", 0.0)
+
     smoke_boost = 0.0
     if test.endswith("pom-smoke.spec.js"):
         broad_change = any(
@@ -131,6 +287,9 @@ def build_features(changed_files, test, test_contents):
         depth_norm,
         changed_count_norm,
         smoke_boost,
+        rag_selection,
+        rag_failure,
+        rag_similarity,
     ]
 
     feature_map = {
@@ -142,11 +301,14 @@ def build_features(changed_files, test, test_contents):
         "path_depth": round(depth_norm, 4),
         "change_scope": round(changed_count_norm, 4),
         "smoke_boost": round(smoke_boost, 4),
+        "rag_selection": round(rag_selection, 4),
+        "rag_failure": round(rag_failure, 4),
+        "rag_similarity": round(rag_similarity, 4),
     }
     return features, feature_map
 
 
-def weak_label(changed_files, test):
+def weak_label(changed_files, test, rag_context):
     """Weak supervision labels for on-the-fly ranking model training."""
     changed_text = " ".join(changed_files).lower()
     stem = re.sub(r'tests/|\.spec\.js', '', test).lower()
@@ -159,19 +321,22 @@ def weak_label(changed_files, test):
         return 1
     if stem == "pom-smoke" and any(cf.startswith("mock-app/") for cf in changed_files):
         return 1
+    signal = rag_context.get("test_signals", {}).get(test, {})
+    if signal.get("selection_sum", 0.0) > 0:
+        return 1
     return 0
 
 
-def ml_rank(changed_files, tests, test_contents):
+def ml_rank(changed_files, tests, test_contents, rag_context):
     """Train a lightweight scikit-learn ranker and score tests."""
     X = []
     y = []
     feature_maps = {}
 
     for test in tests:
-        feature_vec, fmap = build_features(changed_files, test, test_contents)
+        feature_vec, fmap = build_features(changed_files, test, test_contents, rag_context)
         X.append(feature_vec)
-        y.append(weak_label(changed_files, test))
+        y.append(weak_label(changed_files, test, rag_context))
         feature_maps[test] = fmap
 
     if len(set(y)) < 2:
@@ -183,9 +348,23 @@ def ml_rank(changed_files, tests, test_contents):
 
     results = {}
     for i, test in enumerate(tests):
-        score = float(probabilities[i][1])
+        model_score = float(probabilities[i][1])
+        fmap = feature_maps[test]
+
+        # Blend model output with deterministic relevance to improve stability
+        # on tiny per-request training samples.
+        heuristic_score = (
+            (fmap.get("token_overlap", 0.0) * 0.30)
+            + (fmap.get("content_overlap", 0.0) * 0.15)
+            + (fmap.get("stem_exact", 0.0) * 0.20)
+            + (fmap.get("page_hint", 0.0) * 0.15)
+            + (fmap.get("rag_selection", 0.0) * 0.15)
+            + (fmap.get("rag_failure", 0.0) * 0.05)
+        )
+
+        score = (model_score * 0.65) + (heuristic_score * 0.35)
         results[test] = {
-            "score": round(score, 4),
+            "score": round(min(1.0, max(0.0, score)), 4),
             "features": feature_maps[test]
         }
 
@@ -194,20 +373,22 @@ def ml_rank(changed_files, tests, test_contents):
 
 # ── Layer 3: LLM (TinyLlama Reasoning) ───────────────────────────────────────
 
-def llm_validate(changed_files, pr_title, candidates, available_tests):
+def llm_validate(changed_files, pr_title, candidates, available_tests, rag_evidence):
     """
     LLM Layer: TinyLlama validates ML candidates and provides reasoning.
     Receives only the top ML candidates, not all tests (focused context).
     """
     changed_str = "\n".join(f"  - {f}" for f in changed_files)
-    candidates_str = "\n".join(f"  - {t['test']} (ML score: {t['score']})" for t in candidates)
     candidate_tests = [c["test"] for c in candidates]
     candidates_str = "\n".join(f"  - {t}" for t in candidate_tests)
+    rag_evidence_str = "\n".join(rag_evidence) if rag_evidence else "- No historical matches"
 
     prompt = (
         "You are a precise test selection assistant. Be selective - run minimal tests.\n"
         f"Changed files:\n{changed_str}\n"
         f"PR title: {pr_title}\n\n"
+        "Historical RAG evidence from similar PRs:\n"
+        f"{rag_evidence_str}\n\n"
         "Only choose from this candidate list:\n"
         f"{candidates_str}\n\n"
         "Rules:\n"
@@ -238,10 +419,11 @@ def llm_validate(changed_files, pr_title, candidates, available_tests):
 
 def select_tests(changed_files, pr_title, workspace):
     """
-    Full scikit-learn + LLM pipeline:
+    Full scikit-learn + RAG + LLM pipeline:
     1. Discover tests dynamically
-    2. ML:  scikit-learn ranking over feature vectors
-    3. LLM: TinyLlama validation
+    2. RAG: retrieve similar historical PRs
+    3. ML:  scikit-learn ranking over feature vectors + RAG signals
+    4. LLM: TinyLlama validation with retrieved evidence
     """
     available_tests = discover_tests(workspace)
     print(f"[INFO] Discovered tests: {available_tests}")
@@ -257,8 +439,15 @@ def select_tests(changed_files, pr_title, workspace):
 
     test_contents = read_test_contents(workspace, available_tests)
 
+    historical_records = load_historical_records(workspace)
+    rag_context = retrieve_historical_context(changed_files, pr_title, historical_records)
+    print(f"[RAG] Historical records loaded: {len(historical_records)}")
+    print(f"[RAG] Similar records matched: {len(rag_context.get('top_records', []))}")
+    for rec in rag_context.get("top_records", [])[:3]:
+        print(f"  RAG {rec['similarity']:.4f} | PR {rec['pr_id']} | {rec['pr_title']}")
+
     print("[ML] Training scikit-learn ranker and scoring tests...")
-    ml_scores = ml_rank(changed_files, available_tests, test_contents)
+    ml_scores = ml_rank(changed_files, available_tests, test_contents, rag_context)
     for t, v in list(ml_scores.items())[:5]:
         print(f"  ML  {v['score']:.4f} | {t} | {v['features']}")
 
@@ -273,17 +462,33 @@ def select_tests(changed_files, pr_title, workspace):
         if v["score"] >= cutoff
     ]
 
+    direct_match_tests = {
+        t for t, v in ml_scores.items()
+        if (
+            v["features"].get("stem_exact", 0.0) > 0
+            or v["features"].get("page_hint", 0.0) > 0
+            or v["features"].get("test_file_changed", 0.0) > 0
+            or v["features"].get("token_overlap", 0.0) >= 0.5
+        )
+    }
+    if direct_match_tests:
+        narrowed = [c for c in candidates if c["test"] in direct_match_tests]
+        if narrowed:
+            candidates = narrowed
+            print(f"[ML] Direct-match narrowing applied: {sorted(direct_match_tests)}")
+
     if not candidates:
         default = "tests/pom-smoke.spec.js" if "tests/pom-smoke.spec.js" in available_tests else available_tests[0]
         candidates = [{"test": default, "score": 0.1, "features": {}}]
 
     # Bound LLM scope to top-N ML tests so it cannot expand to entire suite.
     candidates = candidates[:MAX_LLM_CANDIDATES]
+    rag_evidence = build_rag_evidence_lines([c["test"] for c in candidates], rag_context)
 
     # Layer 2 - LLM
     print(f"[LLM] Sending {len(candidates)} candidates to TinyLlama...")
     try:
-        llm_tests = llm_validate(changed_files, pr_title, candidates, available_tests)
+        llm_tests = llm_validate(changed_files, pr_title, candidates, available_tests, rag_evidence)
         if llm_tests:
             print(f"[OK] LLM validated: {llm_tests}")
             # Keep ML order and only include LLM-confirmed tests.
@@ -291,30 +496,35 @@ def select_tests(changed_files, pr_title, workspace):
             final = [c["test"] for c in candidates if c["test"] in llm_confirmed]
             if not final:
                 final = [c["test"] for c in candidates]
-            mode = "ml+rag+llm"
             explanations = [
                 {
                     "test": t,
                     "priority_score": ml_scores.get(t, {}).get("score", 0.5),
-                    "evidence": f"sklearn_score={ml_scores.get(t,{}).get('score',0):.3f}",
+                    "evidence": (
+                        f"sklearn_score={ml_scores.get(t,{}).get('score',0):.3f}, "
+                        f"rag_similarity={ml_scores.get(t,{}).get('features',{}).get('rag_similarity',0):.3f}"
+                    ),
                     "reasoning": f"ML features: {ml_scores.get(t, {}).get('features', {})} | Confirmed by LLM"
                 }
                 for t in final
             ]
             final = list(dict.fromkeys(final))
-            return final, "sklearn+llm", explanations
+            return final, "sklearn+rag+llm", explanations
     except Exception as e:
         print(f"[WARN] LLM error: {e} - using ML results only")
 
     # ML-only result
     final = [c["test"] for c in candidates]
     final = list(dict.fromkeys(final))
-    mode = "sklearn"
+    mode = "sklearn+rag"
     explanations = [
         {
             "test": c["test"],
             "priority_score": c["score"],
-            "evidence": f"sklearn_score={c['score']:.3f}",
+            "evidence": (
+                f"sklearn_score={c['score']:.3f}, "
+                f"rag_similarity={c['features'].get('rag_similarity', 0):.3f}"
+            ),
             "reasoning": str(c["features"])
         }
         for c in candidates
@@ -330,7 +540,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok", "model": MODEL, "pipeline": "scikit-learn+LLM"}).encode())
+            self.wfile.write(json.dumps({"status": "ok", "model": MODEL, "pipeline": "scikit-learn+RAG+LLM"}).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -368,7 +578,7 @@ if __name__ == "__main__":
     try:
         server = HTTPServer(("0.0.0.0", port), Handler)
         print(f"[OK] Smart Test Selector running on port {port}")
-        print(f"[OK] Pipeline: scikit-learn ranking -> LLM (TinyLlama)")
+        print(f"[OK] Pipeline: scikit-learn ranking + historical RAG -> LLM (TinyLlama)")
         server.serve_forever()
     except OSError as e:
         print(f"[ERROR] Cannot bind to port {port}: {e}")

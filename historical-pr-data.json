@@ -1,0 +1,87 @@
+{
+  "records": [
+    {
+      "pr_id": 101,
+      "pr_title": "Refactor login page validation",
+      "summary": "Updated login page object and auth form validation behavior",
+      "changed_files": [
+        "src/pages/login.page.js",
+        "mock-app/index.html"
+      ],
+      "selected_tests": [
+        "tests/login.spec.js",
+        "tests/pom-smoke.spec.js"
+      ],
+      "failed_tests": [
+        "tests/login.spec.js"
+      ],
+      "tags": ["auth", "login", "forms"]
+    },
+    {
+      "pr_id": 102,
+      "pr_title": "Signup form error handling improvements",
+      "summary": "Adjusted signup validation and required field behavior",
+      "changed_files": [
+        "src/pages/signup.page.js",
+        "mock-app/index.html"
+      ],
+      "selected_tests": [
+        "tests/signup.spec.js",
+        "tests/pom-smoke.spec.js"
+      ],
+      "failed_tests": [
+        "tests/signup.spec.js"
+      ],
+      "tags": ["auth", "signup", "validation"]
+    },
+    {
+      "pr_id": 103,
+      "pr_title": "Contact page content and form layout update",
+      "summary": "Contact page ui and messaging flow changed",
+      "changed_files": [
+        "src/pages/contact-us.page.js",
+        "mock-app/contact.html",
+        "mock-app/styles.css"
+      ],
+      "selected_tests": [
+        "tests/contact-us.spec.js",
+        "tests/pom-smoke.spec.js"
+      ],
+      "failed_tests": [],
+      "tags": ["content", "contact", "ui"]
+    },
+    {
+      "pr_id": 104,
+      "pr_title": "About page text refresh",
+      "summary": "Marketing copy updates for about us page",
+      "changed_files": [
+        "src/pages/about-us.page.js",
+        "mock-app/about.html"
+      ],
+      "selected_tests": [
+        "tests/about-us.spec.js",
+        "tests/pom-smoke.spec.js"
+      ],
+      "failed_tests": [],
+      "tags": ["content", "about"]
+    },
+    {
+      "pr_id": 105,
+      "pr_title": "Global navigation and header polish",
+      "summary": "Updated top nav and shared layout styles",
+      "changed_files": [
+        "mock-app/styles.css",
+        "src/pages/base.page.js"
+      ],
+      "selected_tests": [
+        "tests/pom-smoke.spec.js",
+        "tests/login.spec.js",
+        "tests/signup.spec.js"
+      ],
+      "failed_tests": [
+        "tests/pom-smoke.spec.js"
+      ],
+      "tags": ["layout", "shared", "navigation"]
+    }
+  ]
+}
