@@ -419,53 +419,49 @@ jobs:
           restore-keys: |
             full-suite-regression-cache
 
-      - name: Initialize cache if missing (first run only)
-        if: steps.cache-restore.outputs.cache-hit != 'true'
-        shell: python
-        run: |
-          import subprocess
-          import sys
-          
-          print("\n" + "="*80)
-          print("[INFO] Cache not found - Initializing baseline (first run)")
-          print("="*80 + "\n")
-          
-          # Run regression to initialize cache
-          result = subprocess.run([sys.executable, "scripts/generate_comparison_report.py", "--regression"], check=False)
-          
-          if result.returncode == 0:
-            print("\n[SUCCESS] Cache initialized successfully")
-            print("[INFO] Baseline is now available for PR comparisons\n")
-          else:
-            print("\n[WARNING] Cache initialization had issues\n")
-
-      - name: Save cache after init (if just initialized)
-        if: steps.cache-restore.outputs.cache-hit != 'true' && always()
-        uses: actions/cache/save@v4
-        with:
-          path: test-results/regression-cache/
-          key: full-suite-regression-cache
-
-      - name: Generate comparison report (smart subset vs cached baseline)
+      - name: Generate comparison report
         if: always()
         shell: python
         env:
           PYTHONIOENCODING: utf-8
           SELECTED_TESTS: ${{ steps.plan.outputs.selected_tests }}
-          REGRESSION_MODE: ${{ github.event.inputs.regression_mode == 'true' || github.event_name == 'schedule' }}
+          IS_REGRESSION_INPUT: ${{ github.event.inputs.regression_mode == 'true' }}
+          IS_SCHEDULE: ${{ github.event_name == 'schedule' }}
+          CACHE_HIT: ${{ steps.cache-restore.outputs.cache-hit }}
         run: |
           import subprocess
           import sys
           import os
 
-          is_regression = os.environ.get("REGRESSION_MODE", "false").lower() == "true"
+          is_regression = (os.environ.get("IS_REGRESSION_INPUT", "false").lower() == "true" or
+                          os.environ.get("IS_SCHEDULE", "false").lower() == "true")
+          cache_hit = os.environ.get("CACHE_HIT", "false").lower() == "true"
+          
+          print("\n" + "="*80)
+          print(f"[INFO] Regression: {is_regression}, Cache Hit: {cache_hit}")
+          print("="*80 + "\n")
           
           if is_regression:
+            # REGRESSION RUN: Always run full suite
             command = [sys.executable, "scripts/generate_comparison_report.py", "--regression"]
-            print("[INFO] Running in REGRESSION mode (full suite + cache update)")
-          else:
+            print("[MODE] REGRESSION: Full suite + cache update")
+          elif cache_hit:
+            # NORMAL PR WITH CACHE: Use cached baseline
             command = [sys.executable, "scripts/generate_comparison_report.py"]
-            print("[INFO] Running in STANDARD mode (smart selection only - no full suite)")
+            print("[MODE] PR with CACHE: Smart tests vs baseline")
+          else:
+            # NORMAL PR WITHOUT CACHE: Initialize cache first
+            print("[MODE] FIRST RUN: Initializing cache...")
+            init_cmd = [sys.executable, "scripts/generate_comparison_report.py", "--regression"]
+            init_result = subprocess.run(init_cmd, check=False)
+            
+            if init_result.returncode == 0:
+              print("[SUCCESS] Cache initialized")
+              # Now run comparison
+              command = [sys.executable, "scripts/generate_comparison_report.py"]
+            else:
+              print("[ERROR] Cache init failed")
+              sys.exit(1)
           
           subprocess.run(command, check=False)
 
