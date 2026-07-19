@@ -112,6 +112,36 @@ def count_results(node):
 
 def build_markdown(selected_tests, smart_run, full_run, smart_counts, full_counts):
     smart_time = smart_run["duration_seconds"]
+    
+    lines = []
+    lines.append("# Smart Selection Comparison Report")
+    lines.append("")
+    
+    if full_run is None:
+        # Cache not initialized - show smart results only
+        lines.append("## Status")
+        lines.append("⚠️ **Cache Not Initialized** - Regression baseline not available")
+        lines.append("")
+        lines.append("This is the first run or cache has been cleared. ")
+        lines.append("A full regression run is needed to establish the baseline for comparisons.")
+        lines.append("")
+        lines.append("## Current Run (Smart Selection Only)")
+        lines.append(f"- Runtime: {smart_time} sec")
+        lines.append(f"- Tests run: {smart_counts['total']}")
+        lines.append(f"- Passed: {smart_counts['passed']}")
+        lines.append(f"- Failed: {smart_counts['failed']}")
+        lines.append(f"- Exit code: {smart_run['exit_code']}")
+        lines.append("")
+        lines.append("## Next Steps")
+        lines.append("1. Run a full regression to initialize the cache:")
+        lines.append("   ```bash")
+        lines.append("   python scripts/generate_comparison_report.py --regression")
+        lines.append("   ```")
+        lines.append("2. This will establish the baseline for future PR comparisons")
+        lines.append("")
+        return "\n".join(lines)
+    
+    # Normal comparison with cache
     full_time = full_run["duration_seconds"]
     saved = round(max(0.0, full_time - smart_time), 2)
     reduction = round((saved / full_time * 100.0), 2) if full_time > 0 else 0.0
@@ -120,10 +150,6 @@ def build_markdown(selected_tests, smart_run, full_run, smart_counts, full_count
     smart_failed = smart_counts["failed"]
     catch_rate = round((smart_failed / full_failed * 100.0), 2) if full_failed > 0 else 100.0
 
-    lines = []
-    lines.append("# Smart Selection Comparison Report")
-    lines.append("")
-    
     # Data source info
     lines.append("## Data Source")
     if full_run.get("cached"):
@@ -173,25 +199,27 @@ def main():
         selected_tests = ["tests/pom-smoke.spec.js"]
         smart_cmd = "npx playwright test tests/pom-smoke.spec.js --reporter=json"
 
-    print("[ACTION] Running smart-selected subset for comparison...")
+    print("[ACTION] Running smart-selected subset...")
     smart_run = run_playwright(smart_cmd)
 
     # Handle full suite reference
+    full_run = None
     if is_regression_run:
         print("[ACTION] Regression run: Running full suite and caching results...")
         full_run = run_playwright(full_cmd)
         save_full_suite_result(full_run)
     else:
-        print("[ACTION] Standard run: Loading full suite results from cache...")
+        print("[ACTION] Standard run: Looking for cached full suite baseline...")
         cached_full_run = load_full_suite_result()
         
         if cached_full_run:
             full_run = cached_full_run
             print("[INFO] Using cached full suite results for comparison")
         else:
-            print("[WARNING] No cached full suite results found. Running full suite now...")
-            full_run = run_playwright(full_cmd)
-            save_full_suite_result(full_run)
+            print("[WARNING] No cached full suite results found")
+            print("[INFO] Skipping comparison - cache will be initialized at next regression run")
+            print("[INFO] To initialize now, run: python scripts/generate_comparison_report.py --regression")
+            full_run = None
 
     smart_counts = count_results(smart_run["report"]) if smart_run["report"] else {
         "total": 0,
@@ -200,7 +228,7 @@ def main():
         "flaky": 0,
         "skipped": 0,
     }
-    full_counts = count_results(full_run["report"]) if full_run["report"] else {
+    full_counts = count_results(full_run["report"]) if full_run and full_run["report"] else {
         "total": 0,
         "failed": 0,
         "passed": 0,
@@ -214,19 +242,22 @@ def main():
     summary = {
         "selected_tests": selected_tests,
         "is_regression_run": is_regression_run,
-        "full_suite_cached": full_run.get("cached", False),
-        "cache_timestamp": full_run.get("cache_timestamp", None),
+        "full_suite_cached": full_run.get("cached", False) if full_run else False,
+        "cache_timestamp": full_run.get("cache_timestamp", None) if full_run else None,
+        "cache_initialized": full_run is not None,
         "smart_run": {
             "duration_seconds": smart_run["duration_seconds"],
             "exit_code": smart_run["exit_code"],
             "counts": smart_counts,
         },
-        "full_run": {
+    }
+    
+    if full_run:
+        summary["full_run"] = {
             "duration_seconds": full_run["duration_seconds"],
             "exit_code": full_run["exit_code"],
             "counts": full_counts,
-        },
-    }
+        }
 
     with open(artifact_dir / "comparison-summary.json", "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2)
@@ -241,11 +272,12 @@ def main():
             handle.write("\n\n--- STDERR ---\n")
             handle.write(smart_run["stderr"])
 
-    with open(artifact_dir / "full-suite-output.txt", "w", encoding="utf-8") as handle:
-        handle.write(full_run["stdout"])
-        if full_run["stderr"]:
-            handle.write("\n\n--- STDERR ---\n")
-            handle.write(full_run["stderr"])
+    if full_run:
+        with open(artifact_dir / "full-suite-output.txt", "w", encoding="utf-8") as handle:
+            handle.write(full_run["stdout"])
+            if full_run["stderr"]:
+                handle.write("\n\n--- STDERR ---\n")
+                handle.write(full_run["stderr"])
 
     print(markdown)
     print("\n[SUCCESS] Comparison report generated")

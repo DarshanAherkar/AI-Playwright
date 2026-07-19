@@ -419,6 +419,27 @@ jobs:
           restore-keys: |
             full-suite-regression-cache
 
+      - name: Bootstrap cache if missing (first run only)
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          
+          cache_file = Path("test-results/regression-cache/latest-full-suite.json")
+          
+          if not cache_file.exists():
+            print("[INFO] Cache not found - running initial bootstrap regression...")
+            print("[ACTION] This first run will execute the full suite to establish baseline")
+            import subprocess
+            import sys
+            result = subprocess.run([sys.executable, "scripts/generate_comparison_report.py", "--regression"], check=False)
+            if result.returncode == 0:
+              print("[SUCCESS] Cache bootstrapped successfully")
+            else:
+              print("[WARNING] Bootstrap regression had issues but continuing...")
+          else:
+            print("[OK] Cache exists - proceeding with standard run")
+
       - name: Generate comparison report (smart subset vs cached baseline)
         if: always()
         shell: python
