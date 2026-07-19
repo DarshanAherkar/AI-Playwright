@@ -439,6 +439,13 @@ jobs:
           else:
             print("\n[WARNING] Cache initialization had issues\n")
 
+      - name: Save cache after init (if just initialized)
+        if: steps.cache-restore.outputs.cache-hit != 'true' && always()
+        uses: actions/cache/save@v4
+        with:
+          path: test-results/regression-cache/
+          key: full-suite-regression-cache
+
       - name: Generate comparison report (smart subset vs cached baseline)
         if: always()
         shell: python
