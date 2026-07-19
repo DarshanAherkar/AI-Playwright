@@ -39,6 +39,7 @@ jobs:
 
     permissions:
       contents: read
+      actions: write
       pull-requests: read
 
     steps:
@@ -436,19 +437,21 @@ jobs:
           is_regression = (os.environ.get("IS_REGRESSION_INPUT", "false").lower() == "true" or
                           os.environ.get("IS_SCHEDULE", "false").lower() == "true")
           cache_hit = os.environ.get("CACHE_HIT", "false").lower() == "true"
+          cache_file = os.path.join("test-results", "regression-cache", "latest-full-suite.json")
+          cache_file_exists = os.path.exists(cache_file)
           
           print("\n" + "="*80)
-          print(f"[INFO] Regression: {is_regression}, Cache Hit: {cache_hit}")
+          print(f"[INFO] Regression: {is_regression}, Cache Hit: {cache_hit}, Baseline File: {cache_file_exists}")
           print("="*80 + "\n")
           
           if is_regression:
             # REGRESSION RUN: Always run full suite
             command = [sys.executable, "scripts/generate_comparison_report.py", "--regression"]
             print("[MODE] REGRESSION: Full suite + cache update")
-          elif cache_hit:
-            # NORMAL PR WITH CACHE: Use cached baseline
+          elif cache_hit or cache_file_exists:
+            # NORMAL PR WITH BASELINE: Use cached baseline
             command = [sys.executable, "scripts/generate_comparison_report.py"]
-            print("[MODE] PR with CACHE: Smart tests vs baseline")
+            print("[MODE] PR with BASELINE: Smart tests vs cached baseline")
           else:
             # NORMAL PR WITHOUT CACHE: Initialize cache first
             print("[MODE] FIRST RUN: Initializing cache...")
@@ -495,6 +498,7 @@ jobs:
 
     permissions:
       contents: read
+      actions: write
 
     steps:
       - name: Checkout repository
