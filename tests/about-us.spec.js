@@ -1,14 +1,11 @@
 const { test, expect } = require('@playwright/test');
 const { AboutUsPage } = require('../src/pages/about-us.page');
-const { LoginPage } = require('../src/pages/login.page');
 
 test.describe('About Us Page', () => {
   let aboutUsPage;
-  let loginPage;
-
+  
   test.beforeEach(async ({ page }) => {
     aboutUsPage = new AboutUsPage(page);
-    loginPage = new LoginPage(page);
   });
 
   test('should navigate to about us page', async ({ page }) => {
