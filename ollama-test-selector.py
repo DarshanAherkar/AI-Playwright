@@ -29,6 +29,7 @@ OLLAMA_URL = "http://localhost:11434"
 MODEL = "tinyllama"
 THRESHOLD = 0.15   # minimum ML score to include a test
 RELATIVE_CUTOFF = 0.50  # must score >= 50% of top scorer
+MAX_LLM_CANDIDATES = 3  # LLM can only validate the top-N ML candidates
 
 # Playwright boilerplate tokens to ignore in TF-IDF
 STOPWORDS = {
@@ -202,16 +203,18 @@ def llm_validate(changed_files, pr_title, candidates, available_tests):
     """
     changed_str = "\n".join(f"  - {f}" for f in changed_files)
     candidates_str = "\n".join(f"  - {t['test']} (ML score: {t['score']})" for t in candidates)
-    all_tests_str = "\n".join(f"  - {t}" for t in available_tests)
+    candidate_tests = [c["test"] for c in candidates]
+    candidates_str = "\n".join(f"  - {t}" for t in candidate_tests)
 
     prompt = (
         "You are a precise test selection assistant. Be selective - run minimal tests.\n"
         f"Changed files:\n{changed_str}\n"
         f"PR title: {pr_title}\n\n"
-        f"ML pre-selected candidates (by relevance score):\n{candidates_str}\n\n"
-        f"All available tests:\n{all_tests_str}\n\n"
+        "Only choose from this candidate list:\n"
+        f"{candidates_str}\n\n"
         "Rules:\n"
         "- Only confirm tests DIRECTLY related to the changed files\n"
+        "- You MUST choose from candidate list only\n"
         "- Do NOT add unrelated tests\n"
         "- If only login changed, only confirm login test\n"
         "Output ONLY the confirmed test filenames, one per line, nothing else.\n"
@@ -228,7 +231,8 @@ def llm_validate(changed_files, pr_title, candidates, available_tests):
         raw = json.loads(resp.read().decode("utf-8")).get("response", "")
         print(f"[LLM] Response: {raw[:300]}")
         found = re.findall(r'tests/[\w-]+\.spec\.js', raw)
-        return [t for t in found if t in available_tests] or None
+        filtered = [t for t in found if t in candidate_tests and t in available_tests]
+        return filtered or None
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -243,6 +247,15 @@ def select_tests(changed_files, pr_title, workspace):
     """
     available_tests = discover_tests(workspace)
     print(f"[INFO] Discovered tests: {available_tests}")
+
+    if not changed_files:
+        default = "tests/pom-smoke.spec.js" if "tests/pom-smoke.spec.js" in available_tests else available_tests[0]
+        return [default], "default", [{
+            "test": default,
+            "priority_score": 0.5,
+            "evidence": "No changed files provided",
+            "reasoning": "Default smoke coverage"
+        }]
 
     test_contents = read_test_contents(workspace, available_tests)
 
@@ -270,7 +283,11 @@ def select_tests(changed_files, pr_title, workspace):
     ]
 
     if not candidates:
-        candidates = [{"test": available_tests[0], "score": 0.1, "features": {}}]
+        default = "tests/pom-smoke.spec.js" if "tests/pom-smoke.spec.js" in available_tests else available_tests[0]
+        candidates = [{"test": default, "score": 0.1, "features": {}}]
+
+    # Bound LLM scope to top-N ML tests so it cannot expand to entire suite.
+    candidates = candidates[:MAX_LLM_CANDIDATES]
 
     # Layer 3 - LLM
     print(f"[LLM] Sending {len(candidates)} candidates to TinyLlama...")
@@ -278,8 +295,11 @@ def select_tests(changed_files, pr_title, workspace):
         llm_tests = llm_validate(changed_files, pr_title, candidates, available_tests)
         if llm_tests:
             print(f"[OK] LLM validated: {llm_tests}")
-            # Merge: keep ML scores for LLM-confirmed tests
-            final = llm_tests
+            # Keep ML order and only include LLM-confirmed tests.
+            llm_confirmed = set(llm_tests)
+            final = [c["test"] for c in candidates if c["test"] in llm_confirmed]
+            if not final:
+                final = [c["test"] for c in candidates]
             mode = "ml+rag+llm"
             explanations = [
                 {
@@ -342,163 +362,6 @@ class Handler(BaseHTTPRequestHandler):
                 "mode": mode,
                 "explanations": explanations
             }).encode())
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, *args):
-        pass
-
-
-if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    try:
-        server = HTTPServer(("0.0.0.0", port), Handler)
-        print(f"[OK] Smart Test Selector running on port {port}")
-        print(f"[OK] Pipeline: RAG (TF-IDF) -> ML (features) -> LLM (TinyLlama)")
-        server.serve_forever()
-    except OSError as e:
-        print(f"[ERROR] Cannot bind to port {port}: {e}")
-        sys.exit(1)
-
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import json
-import os
-import re
-import sys
-import urllib.request
-
-OLLAMA_URL = "http://localhost:11434"
-MODEL = "tinyllama"
-
-
-def discover_tests(workspace_path):
-    """
-    Dynamically scan the tests/ directory for all .spec.js files.
-    No hardcoding - automatically picks up any new test files.
-    """
-    tests_dir = os.path.join(workspace_path, "tests")
-    if not os.path.isdir(tests_dir):
-        return ["tests/pom-smoke.spec.js"]
-    return sorted(
-        f"tests/{f}" for f in os.listdir(tests_dir)
-        if f.endswith(".spec.js")
-    )
-
-
-def get_ollama_suggestion(changed_files, pr_title, available_tests):
-    """
-    Ask TinyLlama to select tests based on:
-    - What files changed (semantic understanding of filenames)
-    - PR title (intent)
-    - Full list of available tests (discovered dynamically)
-    No mapping needed - LLM reasons about the relationship.
-    """
-    changed_str = "\n".join(f"  - {f}" for f in changed_files) if changed_files else "  (none)"
-    tests_str = "\n".join(f"  - {t}" for t in available_tests)
-
-    prompt = (
-        "You are a test selection assistant for a web app.\n"
-        "Your job: given changed files and a PR title, pick ONLY the relevant tests to run.\n"
-        "\n"
-        f"Changed files:\n{changed_str}\n"
-        f"\nPR title: {pr_title}\n"
-        f"\nAvailable tests:\n{tests_str}\n"
-        "\nRules:\n"
-        "- Pick tests whose name relates to the changed files\n"
-        "- A file named login.html or login.page.js relates to login.spec.js\n"
-        "- A file named signup relates to signup.spec.js\n"
-        "- If unsure or multiple pages changed, include pom-smoke.spec.js\n"
-        "- Output ONLY the test filenames, one per line, nothing else\n"
-    )
-
-    payload = json.dumps({"model": MODEL, "prompt": prompt, "stream": False}).encode("utf-8")
-    req = urllib.request.Request(
-        f"{OLLAMA_URL}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=45) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-        raw = result.get("response", "").strip()
-        print(f"[LLM] Raw response: {raw[:200]}")
-
-        # Extract paths matching tests/xxx.spec.js pattern
-        found = re.findall(r'tests/[\w-]+\.spec\.js', raw)
-        # Keep only tests that actually exist
-        valid = [t for t in found if t in available_tests]
-        return valid if valid else None
-
-
-def select_tests(changed_files, pr_title, workspace_path):
-    """Dynamically discover tests, then use TinyLlama to select."""
-    available_tests = discover_tests(workspace_path)
-    print(f"[INFO] Discovered {len(available_tests)} tests: {available_tests}")
-
-    try:
-        ai_tests = get_ollama_suggestion(changed_files, pr_title, available_tests)
-        if ai_tests:
-            print(f"[OK] TinyLlama selected: {ai_tests}")
-            return ai_tests, "tinyllama"
-    except Exception as e:
-        print(f"[WARN] Ollama error: {e}")
-
-    # Minimal fallback: match by keyword only (no hardcoded mapping)
-    print("[FALLBACK] Keyword matching...")
-    selected = set()
-    for f in changed_files:
-        name = f.replace("-", "").replace("_", "").replace(".", "").lower()
-        for test in available_tests:
-            # Extract test stem e.g. "login" from "tests/login.spec.js"
-            stem = re.sub(r'tests/|[\.-]spec\.js', '', test).replace("-", "")
-            if stem in name or name in stem:
-                selected.add(test)
-                print(f"  {f} -> {test}")
-    result = sorted(list(selected)) if selected else ["tests/pom-smoke.spec.js"]
-    return result, "keyword-fallback"
-
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok", "model": MODEL}).encode())
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_POST(self):
-        if self.path == "/api/v1/select-tests":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
-
-            changed_files = body.get("changed_files", [])
-            pr_title = body.get("pr_title", "")
-            workspace = body.get("workspace", os.getcwd())
-
-            tests, mode = select_tests(changed_files, pr_title, workspace)
-
-            response = {
-                "status": "success",
-                "selected_tests": tests,
-                "mode": mode,
-                "explanations": [
-                    {
-                        "test": t,
-                        "priority_score": 0.9 if mode == "tinyllama" else 0.6,
-                        "evidence": f"Dynamically selected by {mode}",
-                        "reasoning": f"Mode: {mode} | Changed: {', '.join(changed_files[:3])}"
-                    }
-                    for t in tests
-                ]
-            }
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode())
         else:
             self.send_response(404)
             self.end_headers()

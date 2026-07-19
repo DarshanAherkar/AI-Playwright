@@ -170,134 +170,153 @@ jobs:
         run: |
           import json
           import os
+          import re
           import urllib.error
           import urllib.request
-          import time
-          
+
           print("=" * 80)
           print("SMART TEST SELECTION ENGINE - ML Ranking & RAG-Based Retrieval")
           print("=" * 80)
-          
-          # Prepare request data
+
           changed_files_str = os.environ.get("CHANGED_FILES", "")
           changed_files = [f.strip() for f in changed_files_str.split(",") if f.strip()]
-          
+
+          workspace = os.environ.get("GITHUB_WORKSPACE", os.getcwd())
+          tests_dir = os.path.join(workspace, "tests")
+          if os.path.isdir(tests_dir):
+            available_tests = sorted(
+              f"tests/{name}" for name in os.listdir(tests_dir)
+              if name.endswith(".spec.js")
+            )
+          else:
+            available_tests = ["tests/pom-smoke.spec.js"]
+
           print(f"\n[INFO] Changed files detected: {len(changed_files)}")
-          for f in changed_files[:5]:
-              print(f"   - {f}")
+          for changed_file in changed_files[:5]:
+            print(f"   - {changed_file}")
           if len(changed_files) > 5:
-              print(f"   ... and {len(changed_files) - 5} more")
-          
+            print(f"   ... and {len(changed_files) - 5} more")
+
           payload = {
-              "pr_number": os.environ.get("PR_NUMBER", "0"),
-              "pr_title": os.environ.get("PR_TITLE", ""),
-              "pr_description": os.environ.get("PR_URL", ""),
-              "changed_files": changed_files,
-              "workspace": os.environ.get("GITHUB_WORKSPACE", os.getcwd()),
-              "request_type": "smart_selection"
+            "pr_number": os.environ.get("PR_NUMBER", "0"),
+            "pr_title": os.environ.get("PR_TITLE", ""),
+            "pr_description": os.environ.get("PR_URL", ""),
+            "changed_files": changed_files,
+            "workspace": workspace,
+            "request_type": "smart_selection"
           }
-          
-          # Try to call smart-test-engine API
+
           api_url = "http://localhost:8000/api/v1/select-tests"
           fallback_used = False
           selected_tests = []
           explanations = []
-          
+
           try:
-              print(f"\n[ACTION] Calling Smart Test Engine API: {api_url}")
-              request_data = json.dumps(payload).encode('utf-8')
-              request = urllib.request.Request(
-                  api_url,
-                  data=request_data,
-                  headers={
-                      "Content-Type": "application/json",
-                      "User-Agent": "smart-test-selection-runner"
-                  },
-                  method="POST"
-              )
-              
-              # Try with longer timeout for ML processing
-              with urllib.request.urlopen(request, timeout=60) as response:
-                  result = json.loads(response.read().decode("utf-8"))
-                  
-                  print("\n[OK] Smart Test Engine Response:")
-                  print(f"   Status: {result.get('status', 'unknown')}")
-                  
-                  # Extract ML-ranked tests
-                  selected_tests = result.get("selected_tests", [])
-                  explanations = result.get("explanations", [])
-                  
-                  print(f"\n[RESULT] ML-Ranked Test Selection ({len(selected_tests)} tests):")
-                  for i, test in enumerate(selected_tests, 1):
-                      print(f"\n   {i}. {test}")
-                      if i <= len(explanations):
-                          exp = explanations[i-1]
-                          priority = exp.get('priority_score', 0)
-                          print(f"      Priority: {priority:.2f}/1.0")
-                          print(f"      Evidence: {exp.get('evidence', 'No evidence')}")
-                          print(f"      Reasoning: {exp.get('reasoning', 'No reasoning')}")
-          
-          except urllib.error.URLError as e:
-              print(f"\n[WARN] Smart Engine API unavailable ({e.reason})")
+            print(f"\n[ACTION] Calling Smart Test Engine API: {api_url}")
+            request_data = json.dumps(payload).encode("utf-8")
+            request = urllib.request.Request(
+              api_url,
+              data=request_data,
+              headers={
+                "Content-Type": "application/json",
+                "User-Agent": "smart-test-selection-runner"
+              },
+              method="POST"
+            )
+
+            with urllib.request.urlopen(request, timeout=60) as response:
+              result = json.loads(response.read().decode("utf-8"))
+              print("\n[OK] Smart Test Engine Response:")
+              print(f"   Status: {result.get('status', 'unknown')}")
+
+              selected_tests = result.get("selected_tests", [])
+              explanations = result.get("explanations", [])
+
+              print(f"\n[RESULT] ML-Ranked Test Selection ({len(selected_tests)} tests):")
+              for i, test in enumerate(selected_tests, 1):
+                print(f"\n   {i}. {test}")
+                if i <= len(explanations):
+                  exp = explanations[i - 1]
+                  priority = exp.get("priority_score", 0)
+                  print(f"      Priority: {priority:.2f}/1.0")
+                  print(f"      Evidence: {exp.get('evidence', 'No evidence')}")
+                  print(f"      Reasoning: {exp.get('reasoning', 'No reasoning')}")
+
+          except urllib.error.URLError as error:
+            print(f"\n[WARN] Smart Engine API unavailable ({error.reason})")
+            fallback_used = True
+          except urllib.error.HTTPError as error:
+            print(f"\n[WARN] Smart Engine API error: HTTP {error.code}")
+            try:
+              print(f"   Response: {error.read().decode('utf-8')}")
+            except Exception:
+              pass
+            fallback_used = True
+          except Exception as error:
+            print(f"\n[WARN] Error calling Smart Engine: {type(error).__name__}: {error}")
+            fallback_used = True
+
+          if selected_tests:
+            selected_tests = [test for test in selected_tests if test in available_tests]
+
+          if selected_tests and available_tests:
+            ratio = len(selected_tests) / len(available_tests)
+            if ratio >= 0.8 and len(changed_files) <= 20:
+              print("\n[GUARDRAIL] Smart Engine selected almost full suite for limited changes.")
+              print(f"   selected={len(selected_tests)} of available={len(available_tests)}")
               fallback_used = True
-          except urllib.error.HTTPError as e:
-              print(f"\n[WARN] Smart Engine API error: HTTP {e.code}")
-              try:
-                  print(f"   Response: {e.read().decode('utf-8')}")
-              except:
-                  pass
-              fallback_used = True
-          except Exception as e:
-              print(f"\n[WARN] Error calling Smart Engine: {type(e).__name__}: {e}")
-              fallback_used = True
-          
-          # Fallback to simple mapping if API unavailable
+              selected_tests = []
+
           if fallback_used or not selected_tests:
-              print("\n[FALLBACK] Using file-based test mapping:")
-              file_to_test_map = {
-                  "src/pages/login.page.js": "tests/login.spec.js",
-                  "src/pages/signup.page.js": "tests/signup.spec.js",
-                  "src/pages/about-us.page.js": "tests/about-us.spec.js",
-                  "src/pages/contact-us.page.js": "tests/contact-us.spec.js",
-                  "src/pages/base.page.js": "tests/pom-smoke.spec.js",
-              }
-              
-              selected_tests = set()
-              for changed_file in changed_files:
-                  # Exact page object mapping
-                  if changed_file in file_to_test_map:
-                      test = file_to_test_map[changed_file]
-                      selected_tests.add(test)
-                      print(f"   - {changed_file} -> {test}")
-                  # Direct test file changes
-                  elif changed_file.startswith("tests/") and changed_file.endswith(".spec.js"):
-                      selected_tests.add(changed_file)
-                      print(f"   - {changed_file} (test file)")
-                  # Mock app HTML/CSS changes -> run smoke test (covers all pages)
-                  elif changed_file.startswith("mock-app/") and (changed_file.endswith(".html") or changed_file.endswith(".css")):
-                      selected_tests.add("tests/pom-smoke.spec.js")
-                      print(f"   - {changed_file} -> smoke test (UI changed)")
-                  # Other source file changes
-                  elif changed_file.startswith("src/"):
-                      selected_tests.add("tests/pom-smoke.spec.js")
-                      print(f"   - {changed_file} -> smoke test (src changed)")
-              
-              if not selected_tests:
-                  selected_tests = {"tests/pom-smoke.spec.js"}
-                  print(f"   - Default: pom-smoke.spec.js")
-              
-              selected_tests = sorted(list(selected_tests))
-          
-          print(f"\n{'='*80}")
+            print("\n[FALLBACK] Using dynamic keyword-based test selection:")
+            selected_tests = set()
+            smoke_test = "tests/pom-smoke.spec.js"
+
+            for changed_file in changed_files:
+              if changed_file.startswith("tests/") and changed_file.endswith(".spec.js"):
+                selected_tests.add(changed_file)
+                print(f"   - {changed_file} (test file)")
+                continue
+
+              if changed_file.startswith("mock-app/") and (
+                changed_file.endswith(".html") or changed_file.endswith(".css")
+              ):
+                selected_tests.add(smoke_test)
+                print(f"   - {changed_file} -> smoke test (UI changed)")
+                continue
+
+              if changed_file.startswith("src/"):
+                file_tokens = set(re.findall(r"[a-z0-9]+", changed_file.lower()))
+                matched = False
+                for test in available_tests:
+                  test_tokens = set(re.findall(r"[a-z0-9]+", test.lower()))
+                  stem_tokens = test_tokens - {"tests", "spec", "js", "pom", "smoke"}
+                  if stem_tokens and file_tokens.intersection(stem_tokens):
+                    selected_tests.add(test)
+                    matched = True
+                    print(f"   - {changed_file} -> {test} (token match)")
+                if not matched:
+                  selected_tests.add(smoke_test)
+                  print(
+                    f"   - {changed_file} -> smoke test "
+                    "(src changed, no direct token match)"
+                  )
+
+            if not selected_tests:
+              selected_tests = {smoke_test}
+              print("   - Default: pom-smoke.spec.js")
+
+            selected_tests = sorted(list(selected_tests))
+
+          print(f"\n{'=' * 80}")
           print(f"[SUMMARY] FINAL SELECTION: {len(selected_tests)} test(s)")
           for test in selected_tests:
-              print(f"   [+] {test}")
-          print(f"{'='*80}\n")
-          
-          # Output for next step
+            print(f"   [+] {test}")
+          print(f"{'=' * 80}\n")
+
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
-              stream.write(f"selected_tests={' '.join(selected_tests)}\n")
-              stream.write(f"fallback_mode={'true' if fallback_used else 'false'}\n")
+            stream.write(f"selected_tests={' '.join(selected_tests)}\n")
+            stream.write(f"fallback_mode={'true' if fallback_used else 'false'}\n")
 
       - name: Build executable test list
         id: plan
