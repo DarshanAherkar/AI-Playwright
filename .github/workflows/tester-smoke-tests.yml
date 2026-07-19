@@ -419,6 +419,26 @@ jobs:
           restore-keys: |
             full-suite-regression-cache
 
+      - name: Initialize cache if missing (first run only)
+        if: steps.cache-restore.outputs.cache-hit != 'true'
+        shell: python
+        run: |
+          import subprocess
+          import sys
+          
+          print("\n" + "="*80)
+          print("[INFO] Cache not found - Initializing baseline (first run)")
+          print("="*80 + "\n")
+          
+          # Run regression to initialize cache
+          result = subprocess.run([sys.executable, "scripts/generate_comparison_report.py", "--regression"], check=False)
+          
+          if result.returncode == 0:
+            print("\n[SUCCESS] Cache initialized successfully")
+            print("[INFO] Baseline is now available for PR comparisons\n")
+          else:
+            print("\n[WARNING] Cache initialization had issues\n")
+
       - name: Generate comparison report (smart subset vs cached baseline)
         if: always()
         shell: python
