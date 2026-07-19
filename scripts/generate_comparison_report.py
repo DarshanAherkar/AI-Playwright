@@ -199,26 +199,35 @@ def main():
         selected_tests = ["tests/pom-smoke.spec.js"]
         smart_cmd = "npx playwright test tests/pom-smoke.spec.js --reporter=json"
 
+    print("\n" + "="*80)
+    if is_regression_run:
+        print("REGRESSION MODE: Full Suite + Cache Update")
+    else:
+        print("STANDARD MODE: Smart Tests Only (No Full Suite)")
+    print("="*80 + "\n")
+
     print("[ACTION] Running smart-selected subset...")
     smart_run = run_playwright(smart_cmd)
 
     # Handle full suite reference
     full_run = None
     if is_regression_run:
-        print("[ACTION] Regression run: Running full suite and caching results...")
+        print("[ACTION] Regression mode: Running full suite and caching results...")
         full_run = run_playwright(full_cmd)
         save_full_suite_result(full_run)
     else:
-        print("[ACTION] Standard run: Looking for cached full suite baseline...")
+        print("[ACTION] Standard mode: NOT running full suite (smart tests only)")
+        print("[INFO] Checking if cached baseline exists...")
         cached_full_run = load_full_suite_result()
         
         if cached_full_run:
             full_run = cached_full_run
-            print("[INFO] Using cached full suite results for comparison")
+            print("[SUCCESS] Using cached full suite results for comparison")
         else:
-            print("[WARNING] No cached full suite results found")
-            print("[INFO] Skipping comparison - cache will be initialized at next regression run")
-            print("[INFO] To initialize now, run: python scripts/generate_comparison_report.py --regression")
+            print("[WARNING] No cached baseline available")
+            print("[INFO] Comparisons require a regression baseline")
+            print("[INFO] To initialize cache, manually trigger: python scripts/generate_comparison_report.py --regression")
+            print("[INFO] Or wait for scheduled nightly regression to run")
             full_run = None
 
     smart_counts = count_results(smart_run["report"]) if smart_run["report"] else {
