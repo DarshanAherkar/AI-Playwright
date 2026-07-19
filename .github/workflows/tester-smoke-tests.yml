@@ -62,6 +62,22 @@ jobs:
         run: |
           $pythonExe = (Get-Command python).Source
           $serverScript = "${{ github.workspace }}\ollama-test-selector.py"
+
+          Write-Host "[ACTION] Clearing any stale selector on port 8000..."
+          $listeners = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
+          if ($listeners) {
+            $pids = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
+            foreach ($pid in $pids) {
+              try {
+                Stop-Process -Id $pid -Force -ErrorAction Stop
+                Write-Host "[OK] Stopped stale process PID: $pid"
+              } catch {
+                Write-Host "[WARN] Failed to stop PID ${pid}: $($_.Exception.Message)"
+              }
+            }
+          } else {
+            Write-Host "[OK] No stale process found on port 8000"
+          }
           
           Write-Host "[ACTION] Starting Ollama Smart Test Selector..."
           
@@ -308,6 +324,9 @@ jobs:
 
             selected_tests = sorted(list(selected_tests))
 
+          # Absolute safety: never allow duplicates in execution list.
+          selected_tests = list(dict.fromkeys(selected_tests))
+
           print(f"\n{'=' * 80}")
           print(f"[SUMMARY] FINAL SELECTION: {len(selected_tests)} test(s)")
           for test in selected_tests:
@@ -330,6 +349,7 @@ jobs:
           # Get tests from smart selection engine
           selected_tests_str = os.environ.get("SELECTED_TESTS", "")
           selected_tests = selected_tests_str.split() if selected_tests_str else ["tests/pom-smoke.spec.js"]
+          selected_tests = list(dict.fromkeys(selected_tests))
           
           print(f"Tests to execute: {selected_tests}")
           

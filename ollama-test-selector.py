@@ -232,6 +232,7 @@ def llm_validate(changed_files, pr_title, candidates, available_tests):
         print(f"[LLM] Response: {raw[:300]}")
         found = re.findall(r'tests/[\w-]+\.spec\.js', raw)
         filtered = [t for t in found if t in candidate_tests and t in available_tests]
+        filtered = list(dict.fromkeys(filtered))
         return filtered or None
 
 
@@ -310,12 +311,14 @@ def select_tests(changed_files, pr_title, workspace):
                 }
                 for t in final
             ]
+            final = list(dict.fromkeys(final))
             return final, mode, explanations
     except Exception as e:
         print(f"[WARN] LLM error: {e} - using ML results only")
 
     # ML-only result
     final = [c["test"] for c in candidates]
+    final = list(dict.fromkeys(final))
     mode = "ml+rag"
     explanations = [
         {
