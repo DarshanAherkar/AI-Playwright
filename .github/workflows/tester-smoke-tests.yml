@@ -46,19 +46,39 @@ jobs:
       - name: Checkout tester repository
         uses: actions/checkout@v4
 
-      - name: Checkout source repository at PR head
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.inputs.source_repo }}
-          ref: ${{ github.event.inputs.head_sha }}
-          token: ${{ secrets.SOURCE_REPO_TOKEN }}
-          path: source-pr
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Normalize source repository input
+        id: source-repo
+        if: github.event_name == 'workflow_dispatch'
+        shell: powershell
+        env:
+          SOURCE_REPO_INPUT: ${{ github.event.inputs.source_repo }}
+        run: |
+          $repo = $env:SOURCE_REPO_INPUT.Trim()
+          $repo = $repo -replace '^https?://github.com/', ''
+          $repo = $repo -replace '^github.com/', ''
+          $repo = $repo -replace '\.git$', ''
+
+          if (-not $repo.Contains('/')) {
+            Write-Error "Invalid source_repo format: '$env:SOURCE_REPO_INPUT'. Expected owner/repo or GitHub URL."
+            exit 1
+          }
+
+          Write-Host "[INFO] Normalized source repo: $repo"
+          "repo_slug=$repo" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Checkout source repository at PR head
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source-repo.outputs.repo_slug }}
+          ref: ${{ github.event.inputs.head_sha }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source-pr
 
       - name: Install Python dependencies
         run: |
