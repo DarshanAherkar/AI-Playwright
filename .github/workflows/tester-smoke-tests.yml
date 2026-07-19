@@ -77,7 +77,7 @@ jobs:
         with:
           repository: ${{ steps.source-repo.outputs.repo_slug }}
           ref: ${{ github.event.inputs.head_sha }}
-          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
           path: source-pr
 
       - name: Install Python dependencies
