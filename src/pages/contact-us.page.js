@@ -13,7 +13,7 @@ class ContactUsPage extends BasePage {
   }
 
   async open() {
-    await this.goto('https://darshanaherkar.github.io/AI-Testing/');
+    await this.openHome();
   }
 
   async navigateToContact() {

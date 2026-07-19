@@ -46,6 +46,15 @@ jobs:
       - name: Checkout tester repository
         uses: actions/checkout@v4
 
+      - name: Checkout source repository at PR head
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.source_repo }}
+          ref: ${{ github.event.inputs.head_sha }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source-pr
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -380,6 +389,66 @@ jobs:
           npm install
           npx playwright install
 
+      - name: Start source PR app server
+        if: github.event_name == 'workflow_dispatch'
+        shell: powershell
+        run: |
+          Write-Host "[ACTION] Preparing source PR app server on port 4173..."
+
+          $listeners = Get-NetTCPConnection -LocalPort 4173 -State Listen -ErrorAction SilentlyContinue
+          if ($listeners) {
+            $pids = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
+            foreach ($procId in $pids) {
+              try {
+                Stop-Process -Id $procId -Force -ErrorAction Stop
+                Write-Host "[OK] Stopped existing process on port 4173 (PID: $procId)"
+              } catch {
+                Write-Host "[WARN] Could not stop PID ${procId}: $($_.Exception.Message)"
+              }
+            }
+          }
+
+          $pythonExe = (Get-Command python).Source
+          $sourceDir = "${{ github.workspace }}\source-pr"
+
+          if (-not (Test-Path $sourceDir)) {
+            Write-Error "Source checkout not found: $sourceDir"
+            exit 1
+          }
+
+          Write-Host "[ACTION] Starting static server from: $sourceDir"
+          Start-Process `
+            -FilePath $pythonExe `
+            -ArgumentList "-m", "http.server", "4173", "--bind", "127.0.0.1", "--directory", $sourceDir `
+            -WindowStyle Hidden `
+            -PassThru | Out-Null
+
+          Start-Sleep -Seconds 3
+          Write-Host "[OK] Source PR app server started: http://127.0.0.1:4173"
+
+      - name: Verify source PR app is reachable
+        if: github.event_name == 'workflow_dispatch'
+        shell: python
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          import time
+          import urllib.request
+
+          url = "http://127.0.0.1:4173"
+          print(f"[ACTION] Verifying app URL: {url}")
+
+          for attempt in range(1, 11):
+            try:
+              with urllib.request.urlopen(url, timeout=5) as response:
+                print(f"[OK] Source PR app reachable (HTTP {response.status})")
+                break
+            except Exception as exc:
+              if attempt == 10:
+                raise RuntimeError(f"Source PR app not reachable after retries: {exc}")
+              print(f"[WAIT] Attempt {attempt}/10 failed: {type(exc).__name__}")
+              time.sleep(2)
+
       - name: Display test selection summary
         shell: python
         env:
@@ -408,6 +477,8 @@ jobs:
           print("\n" + "="*80 + "\n")
 
       - name: Execute selected tests
+        env:
+          TARGET_BASE_URL: http://127.0.0.1:4173
         run: |
           npx playwright test ${{ steps.plan.outputs.selected_tests }}
 
@@ -416,6 +487,7 @@ jobs:
         shell: python
         env:
           PYTHONIOENCODING: utf-8
+          TARGET_BASE_URL: http://127.0.0.1:4173
           SELECTED_TESTS: ${{ steps.plan.outputs.selected_tests }}
           IS_REGRESSION_INPUT: ${{ github.event.inputs.regression_mode == 'true' }}
           IS_SCHEDULE: ${{ github.event_name == 'schedule' }}
