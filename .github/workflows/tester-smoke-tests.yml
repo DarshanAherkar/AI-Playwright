@@ -23,9 +23,18 @@ on:
         description: Source commit SHA
         required: true
         type: string
+      regression_mode:
+        description: Run as full regression (updates cache baseline)
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # Run full regression nightly at 2 AM UTC
+    - cron: '0 2 * * *'
 
 jobs:
   smart-test-run:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: self-hosted
 
     permissions:
@@ -401,18 +410,44 @@ jobs:
         run: |
           npx playwright test ${{ steps.plan.outputs.selected_tests }}
 
-      - name: Generate comparison report (smart subset vs full suite)
+      - name: Restore full suite cache (regression baseline)
+        id: cache-restore
+        uses: actions/cache@v4
+        with:
+          path: test-results/regression-cache/
+          key: full-suite-regression-cache
+          restore-keys: |
+            full-suite-regression-cache
+
+      - name: Generate comparison report (smart subset vs cached baseline)
         if: always()
         shell: python
         env:
           PYTHONIOENCODING: utf-8
           SELECTED_TESTS: ${{ steps.plan.outputs.selected_tests }}
+          REGRESSION_MODE: ${{ github.event.inputs.regression_mode == 'true' || github.event_name == 'schedule' }}
         run: |
           import subprocess
           import sys
+          import os
 
-          command = [sys.executable, "scripts/generate_comparison_report.py"]
+          is_regression = os.environ.get("REGRESSION_MODE", "false").lower() == "true"
+          
+          if is_regression:
+            command = [sys.executable, "scripts/generate_comparison_report.py", "--regression"]
+            print("[INFO] Running in REGRESSION mode (full suite + cache update)")
+          else:
+            command = [sys.executable, "scripts/generate_comparison_report.py"]
+            print("[INFO] Running in STANDARD mode (smart selection vs cached baseline)")
+          
           subprocess.run(command, check=False)
+
+      - name: Save full suite cache (for next runs)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: test-results/regression-cache/
+          key: full-suite-regression-cache
 
       - name: Upload comparison report
         if: always()
@@ -429,3 +464,85 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 30
+
+  # Scheduled nightly regression: Full suite + cache update (no PR context needed)
+  nightly-regression:
+    if: github.event_name == 'schedule'
+    runs-on: self-hosted
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Install Playwright dependencies
+        run: |
+          npm install
+          npx playwright install
+
+      - name: Restore cache (if exists)
+        uses: actions/cache@v4
+        with:
+          path: test-results/regression-cache/
+          key: full-suite-regression-cache
+          restore-keys: |
+            full-suite-regression-cache
+
+      - name: Run full regression with cache update
+        shell: python
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          import subprocess
+          import sys
+
+          print("=" * 80)
+          print("NIGHTLY FULL REGRESSION RUN")
+          print("=" * 80)
+          print("")
+          print("[INFO] This run:")
+          print("  1. Executes the full Playwright test suite")
+          print("  2. Caches results for all future PR comparisons")
+          print("  3. Establishes baseline for the next 24 hours")
+          print("")
+
+          # Run in regression mode: full suite + cache
+          command = [sys.executable, "scripts/generate_comparison_report.py", "--regression"]
+          result = subprocess.run(command, check=False)
+          
+          sys.exit(result.returncode)
+
+      - name: Save cache (for PR runs)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: test-results/regression-cache/
+          key: full-suite-regression-cache
+
+      - name: Upload regression report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-regression-report
+          path: comparison-report/
+          retention-days: 90
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-regression-playwright-report
+          path: playwright-report/
+          retention-days: 90
