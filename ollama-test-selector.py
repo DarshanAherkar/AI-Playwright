@@ -1,29 +1,25 @@
 #!/usr/bin/env python3
 """
-Smart Test Selector: ML + RAG + LLM Pipeline
+Smart Test Selector: scikit-learn + LLM Pipeline
 ─────────────────────────────────────────────
-Layer 1 - RAG (Retrieval-Augmented Generation):
-  Pure Python TF-IDF vectorization + cosine similarity
-  Reads actual test file contents to find semantically similar tests
+Layer 1 - ML (Ranking):
+    scikit-learn Logistic Regression
+    Features: token overlap, content overlap, path hints, change scope
 
-Layer 2 - ML (Ranking):
-  Weighted multi-feature scoring (no training data needed)
-  Features: RAG similarity, token overlap, content match, path depth
-
-Layer 3 - LLM (Reasoning):
+Layer 2 - LLM (Reasoning):
   TinyLlama validates ML candidates and explains the selection
 
 Fully dynamic - no hardcoded mappings.
 """
 
-from collections import defaultdict
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
-import math
 import os
 import re
 import sys
 import urllib.request
+
+from sklearn.linear_model import LogisticRegression
 
 OLLAMA_URL = "http://localhost:11434"
 MODEL = "tinyllama"
@@ -95,100 +91,102 @@ def read_test_contents(workspace, tests):
     return contents
 
 
-# ── Layer 1: RAG (TF-IDF Retrieval) ──────────────────────────────────────────
+def build_features(changed_files, test, test_contents):
+    """Create numeric features for one (PR change set, test) pair."""
+    changed_text = " ".join(changed_files)
+    changed_tokens = set(tokenize(changed_text))
 
-def build_tfidf(docs):
-    """Build TF-IDF vectors for a list of documents."""
-    tf_list = []
-    for doc in docs:
-        tokens = tokenize(doc)
-        freq = defaultdict(int)
-        for t in tokens:
-            freq[t] += 1
-        total = len(tokens) or 1
-        tf_list.append({t: c / total for t, c in freq.items()})
+    test_stem = re.sub(r'tests/|\.spec\.js', '', test)
+    test_tokens = set(tokenize(test_stem))
+    content_tokens = set(tokenize(test_contents.get(test, "")))
 
-    N = len(docs)
-    df = defaultdict(int)
-    for tf in tf_list:
-        for t in tf:
-            df[t] += 1
-    idf = {t: math.log((N + 1) / (df[t] + 1)) for t in df}
+    union = test_tokens | changed_tokens
+    token_overlap = len(test_tokens & changed_tokens) / len(union) if union else 0.0
+    content_overlap = len(content_tokens & changed_tokens) / (len(changed_tokens) or 1)
 
-    return [{t: v * idf.get(t, 0) for t, v in tf.items()} for tf in tf_list]
+    stem_exact_in_changed = 1.0 if test_stem.replace("-", "") in changed_text.replace("-", "") else 0.0
+    test_file_changed = 1.0 if test in changed_files else 0.0
+    page_hint = 1.0 if any(f"{test_stem}.page" in cf for cf in changed_files) else 0.0
 
+    avg_depth = sum(f.count('/') for f in changed_files) / (len(changed_files) or 1)
+    depth_norm = min(1.0, avg_depth / 5)
+    changed_count_norm = min(1.0, len(changed_files) / 20)
 
-def cosine_sim(a, b):
-    keys = set(a) & set(b)
-    if not keys:
-        return 0.0
-    dot = sum(a[k] * b[k] for k in keys)
-    mag = math.sqrt(sum(v**2 for v in a.values())) * math.sqrt(sum(v**2 for v in b.values()))
-    return dot / mag if mag else 0.0
+    smoke_boost = 0.0
+    if test.endswith("pom-smoke.spec.js"):
+        broad_change = any(
+            cf.startswith("mock-app/") or (
+                cf.startswith("src/") and not any(tag in cf for tag in ["login", "signup", "about", "contact"])
+            )
+            for cf in changed_files
+        )
+        smoke_boost = 1.0 if broad_change else 0.0
 
-
-def rag_retrieve(changed_files, tests, test_contents):
-    """
-    RAG Layer: Embed changed files + test content using TF-IDF.
-    Returns cosine similarity score per test.
-    """
-    query = " ".join(changed_files)
-    corpus = [query] + [
-        f"{test} {test_contents.get(test, '')}" for test in tests
+    features = [
+        token_overlap,
+        content_overlap,
+        stem_exact_in_changed,
+        test_file_changed,
+        page_hint,
+        depth_norm,
+        changed_count_norm,
+        smoke_boost,
     ]
-    vecs = build_tfidf(corpus)
-    query_vec = vecs[0]
-    return {
-        test: cosine_sim(query_vec, vecs[i + 1])
-        for i, test in enumerate(tests)
+
+    feature_map = {
+        "token_overlap": round(token_overlap, 4),
+        "content_overlap": round(content_overlap, 4),
+        "stem_exact": round(stem_exact_in_changed, 4),
+        "test_file_changed": round(test_file_changed, 4),
+        "page_hint": round(page_hint, 4),
+        "path_depth": round(depth_norm, 4),
+        "change_scope": round(changed_count_norm, 4),
+        "smoke_boost": round(smoke_boost, 4),
     }
+    return features, feature_map
 
 
-# ── Layer 2: ML (Feature-Based Ranking) ──────────────────────────────────────
+def weak_label(changed_files, test):
+    """Weak supervision labels for on-the-fly ranking model training."""
+    changed_text = " ".join(changed_files).lower()
+    stem = re.sub(r'tests/|\.spec\.js', '', test).lower()
 
-def ml_rank(changed_files, tests, test_contents, rag_scores):
-    """
-    ML Layer: Multi-feature weighted scoring.
+    if test in changed_files:
+        return 1
+    if stem.replace("-", "") in changed_text.replace("-", ""):
+        return 1
+    if any(f"{stem}.page" in cf.lower() for cf in changed_files):
+        return 1
+    if stem == "pom-smoke" and any(cf.startswith("mock-app/") for cf in changed_files):
+        return 1
+    return 0
 
-    Features:
-      F1 (w=0.40) RAG semantic similarity     - TF-IDF cosine similarity
-      F2 (w=0.35) Token overlap               - shared tokens in names
-      F3 (w=0.15) Content keyword match       - test file mentions changed file terms
-      F4 (w=0.10) Path depth penalty          - deeper change = broader impact
 
-    Returns dict of test -> (score, feature_breakdown)
-    """
-    changed_tokens = set(tokenize(" ".join(changed_files)))
-    results = {}
+def ml_rank(changed_files, tests, test_contents):
+    """Train a lightweight scikit-learn ranker and score tests."""
+    X = []
+    y = []
+    feature_maps = {}
 
     for test in tests:
-        # F1: RAG score
-        f1 = rag_scores.get(test, 0.0)
+        feature_vec, fmap = build_features(changed_files, test, test_contents)
+        X.append(feature_vec)
+        y.append(weak_label(changed_files, test))
+        feature_maps[test] = fmap
 
-        # F2: Token overlap between changed filenames and test name
-        test_stem = re.sub(r'tests/|\.spec\.js', '', test)
-        test_tokens = set(tokenize(test_stem))
-        union = test_tokens | changed_tokens
-        f2 = len(test_tokens & changed_tokens) / len(union) if union else 0.0
+    if len(set(y)) < 2:
+        y = [1 if i == 0 else 0 for i in range(len(tests))]
 
-        # F3: Content keyword match - does test file reference changed file terms?
-        content_tokens = set(tokenize(test_contents.get(test, "")))
-        f3 = len(changed_tokens & content_tokens) / (len(changed_tokens) or 1)
+    model = LogisticRegression(random_state=42, solver="liblinear")
+    model.fit(X, y)
+    probabilities = model.predict_proba(X)
 
-        # F4: Avg path depth of changed files (deeper = less specific impact)
-        avg_depth = sum(f.count('/') for f in changed_files) / (len(changed_files) or 1)
-        f4 = min(1.0, avg_depth / 4)   # normalize 0-1
-
-        score = (f1 * 0.40) + (f2 * 0.35) + (f3 * 0.15) + (f4 * 0.10)
-
+    results = {}
+    for i, test in enumerate(tests):
+        score = float(probabilities[i][1])
         results[test] = {
-            "score": round(min(1.0, score), 4),
-            "features": {
-                "rag_similarity": round(f1, 4),
-                "token_overlap": round(f2, 4),
-                "content_match": round(f3, 4),
-                "path_depth": round(f4, 4)
-            }
+            "score": round(score, 4),
+            "features": feature_maps[test]
         }
 
     return dict(sorted(results.items(), key=lambda x: x[1]["score"], reverse=True))
@@ -240,11 +238,10 @@ def llm_validate(changed_files, pr_title, candidates, available_tests):
 
 def select_tests(changed_files, pr_title, workspace):
     """
-    Full ML + RAG + LLM pipeline:
+    Full scikit-learn + LLM pipeline:
     1. Discover tests dynamically
-    2. RAG: TF-IDF similarity retrieval
-    3. ML:  Feature-based ranking
-    4. LLM: TinyLlama validation
+    2. ML:  scikit-learn ranking over feature vectors
+    3. LLM: TinyLlama validation
     """
     available_tests = discover_tests(workspace)
     print(f"[INFO] Discovered tests: {available_tests}")
@@ -260,15 +257,8 @@ def select_tests(changed_files, pr_title, workspace):
 
     test_contents = read_test_contents(workspace, available_tests)
 
-    # Layer 1 - RAG
-    print("[RAG] Computing TF-IDF cosine similarity...")
-    rag_scores = rag_retrieve(changed_files, available_tests, test_contents)
-    for t, s in sorted(rag_scores.items(), key=lambda x: -x[1]):
-        print(f"  RAG {s:.4f} | {t}")
-
-    # Layer 2 - ML
-    print("[ML] Computing feature scores...")
-    ml_scores = ml_rank(changed_files, available_tests, test_contents, rag_scores)
+    print("[ML] Training scikit-learn ranker and scoring tests...")
+    ml_scores = ml_rank(changed_files, available_tests, test_contents)
     for t, v in list(ml_scores.items())[:5]:
         print(f"  ML  {v['score']:.4f} | {t} | {v['features']}")
 
@@ -290,7 +280,7 @@ def select_tests(changed_files, pr_title, workspace):
     # Bound LLM scope to top-N ML tests so it cannot expand to entire suite.
     candidates = candidates[:MAX_LLM_CANDIDATES]
 
-    # Layer 3 - LLM
+    # Layer 2 - LLM
     print(f"[LLM] Sending {len(candidates)} candidates to TinyLlama...")
     try:
         llm_tests = llm_validate(changed_files, pr_title, candidates, available_tests)
@@ -306,25 +296,25 @@ def select_tests(changed_files, pr_title, workspace):
                 {
                     "test": t,
                     "priority_score": ml_scores.get(t, {}).get("score", 0.5),
-                    "evidence": f"RAG={rag_scores.get(t,0):.3f}, ML={ml_scores.get(t,{}).get('score',0):.3f}",
+                    "evidence": f"sklearn_score={ml_scores.get(t,{}).get('score',0):.3f}",
                     "reasoning": f"ML features: {ml_scores.get(t, {}).get('features', {})} | Confirmed by LLM"
                 }
                 for t in final
             ]
             final = list(dict.fromkeys(final))
-            return final, mode, explanations
+            return final, "sklearn+llm", explanations
     except Exception as e:
         print(f"[WARN] LLM error: {e} - using ML results only")
 
     # ML-only result
     final = [c["test"] for c in candidates]
     final = list(dict.fromkeys(final))
-    mode = "ml+rag"
+    mode = "sklearn"
     explanations = [
         {
             "test": c["test"],
             "priority_score": c["score"],
-            "evidence": f"RAG={rag_scores.get(c['test'],0):.3f}",
+            "evidence": f"sklearn_score={c['score']:.3f}",
             "reasoning": str(c["features"])
         }
         for c in candidates
@@ -340,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok", "model": MODEL, "pipeline": "ML+RAG+LLM"}).encode())
+            self.wfile.write(json.dumps({"status": "ok", "model": MODEL, "pipeline": "scikit-learn+LLM"}).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -378,7 +368,7 @@ if __name__ == "__main__":
     try:
         server = HTTPServer(("0.0.0.0", port), Handler)
         print(f"[OK] Smart Test Selector running on port {port}")
-        print(f"[OK] Pipeline: RAG (TF-IDF) -> ML (features) -> LLM (TinyLlama)")
+        print(f"[OK] Pipeline: scikit-learn ranking -> LLM (TinyLlama)")
         server.serve_forever()
     except OSError as e:
         print(f"[ERROR] Cannot bind to port {port}: {e}")
