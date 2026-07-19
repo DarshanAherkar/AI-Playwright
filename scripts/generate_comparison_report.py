@@ -3,7 +3,12 @@ import json
 import os
 import subprocess
 import time
+import sys
 from pathlib import Path
+from datetime import datetime
+
+
+FULL_SUITE_CACHE_DIR = Path("test-results/regression-cache")
 
 
 def run_playwright(command):
@@ -27,6 +32,56 @@ def run_playwright(command):
         "stdout": completed.stdout,
         "stderr": completed.stderr,
     }
+
+
+def save_full_suite_result(full_run):
+    """Save full suite result to cache for future comparisons"""
+    FULL_SUITE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().isoformat()
+    cache_file = FULL_SUITE_CACHE_DIR / "latest-full-suite.json"
+    
+    cache_data = {
+        "timestamp": timestamp,
+        "duration_seconds": full_run["duration_seconds"],
+        "exit_code": full_run["exit_code"],
+        "report": full_run["report"],
+        "stdout": full_run["stdout"],
+        "stderr": full_run["stderr"],
+    }
+    
+    with open(cache_file, "w", encoding="utf-8") as f:
+        json.dump(cache_data, f, indent=2)
+    
+    print(f"[CACHE] Full suite results saved to {cache_file}")
+    return cache_file
+
+
+def load_full_suite_result():
+    """Load the last full suite result from cache"""
+    cache_file = FULL_SUITE_CACHE_DIR / "latest-full-suite.json"
+    
+    if not cache_file.exists():
+        return None
+    
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            cache_data = json.load(f)
+        
+        timestamp = cache_data.get("timestamp", "unknown")
+        print(f"[CACHE] Loaded full suite results from {timestamp}")
+        
+        return {
+            "exit_code": cache_data["exit_code"],
+            "duration_seconds": cache_data["duration_seconds"],
+            "report": cache_data["report"],
+            "stdout": cache_data["stdout"],
+            "stderr": cache_data["stderr"],
+            "cached": True,
+            "cache_timestamp": timestamp,
+        }
+    except Exception as e:
+        print(f"[ERROR] Failed to load cache: {e}")
+        return None
 
 
 def count_results(node):
@@ -68,6 +123,18 @@ def build_markdown(selected_tests, smart_run, full_run, smart_counts, full_count
     lines = []
     lines.append("# Smart Selection Comparison Report")
     lines.append("")
+    
+    # Data source info
+    lines.append("## Data Source")
+    if full_run.get("cached"):
+        cache_timestamp = full_run.get("cache_timestamp", "unknown")
+        lines.append(f"- Full-suite reference: From regression cache (timestamp: {cache_timestamp})")
+        lines.append(f"- Smart-selected tests: Fresh run (current PR)")
+    else:
+        lines.append(f"- Full-suite reference: Fresh run (current execution)")
+        lines.append(f"- Smart-selected tests: Fresh run (current execution)")
+    lines.append("")
+    
     lines.append("## Run Inputs")
     lines.append(f"- Selected tests: {' '.join(selected_tests) if selected_tests else 'None'}")
     lines.append("")
@@ -94,6 +161,9 @@ def build_markdown(selected_tests, smart_run, full_run, smart_counts, full_count
 
 
 def main():
+    # Check for regression mode flag
+    is_regression_run = "--regression" in sys.argv
+    
     selected_tests = os.environ.get("SELECTED_TESTS", "").split()
 
     smart_cmd = "npx playwright test " + " ".join(selected_tests) + " --reporter=json"
@@ -106,8 +176,22 @@ def main():
     print("[ACTION] Running smart-selected subset for comparison...")
     smart_run = run_playwright(smart_cmd)
 
-    print("[ACTION] Running full suite for comparison...")
-    full_run = run_playwright(full_cmd)
+    # Handle full suite reference
+    if is_regression_run:
+        print("[ACTION] Regression run: Running full suite and caching results...")
+        full_run = run_playwright(full_cmd)
+        save_full_suite_result(full_run)
+    else:
+        print("[ACTION] Standard run: Loading full suite results from cache...")
+        cached_full_run = load_full_suite_result()
+        
+        if cached_full_run:
+            full_run = cached_full_run
+            print("[INFO] Using cached full suite results for comparison")
+        else:
+            print("[WARNING] No cached full suite results found. Running full suite now...")
+            full_run = run_playwright(full_cmd)
+            save_full_suite_result(full_run)
 
     smart_counts = count_results(smart_run["report"]) if smart_run["report"] else {
         "total": 0,
@@ -129,6 +213,9 @@ def main():
 
     summary = {
         "selected_tests": selected_tests,
+        "is_regression_run": is_regression_run,
+        "full_suite_cached": full_run.get("cached", False),
+        "cache_timestamp": full_run.get("cache_timestamp", None),
         "smart_run": {
             "duration_seconds": smart_run["duration_seconds"],
             "exit_code": smart_run["exit_code"],
@@ -161,6 +248,8 @@ def main():
             handle.write(full_run["stderr"])
 
     print(markdown)
+    print("\n[SUCCESS] Comparison report generated")
+    print(f"[INFO] Report saved to: {artifact_dir}")
 
 
 if __name__ == "__main__":
