@@ -411,15 +411,6 @@ jobs:
         run: |
           npx playwright test ${{ steps.plan.outputs.selected_tests }}
 
-      - name: Restore full suite cache (regression baseline)
-        id: cache-restore
-        uses: actions/cache@v4
-        with:
-          path: .ci-cache/full-suite-regression/
-          key: full-suite-regression-cache
-          restore-keys: |
-            full-suite-regression-cache
-
       - name: Generate comparison report
         if: always()
         shell: python
@@ -428,7 +419,8 @@ jobs:
           SELECTED_TESTS: ${{ steps.plan.outputs.selected_tests }}
           IS_REGRESSION_INPUT: ${{ github.event.inputs.regression_mode == 'true' }}
           IS_SCHEDULE: ${{ github.event_name == 'schedule' }}
-          CACHE_HIT: ${{ steps.cache-restore.outputs.cache-hit }}
+          CACHE_HIT: 'false'
+          FULL_SUITE_CACHE_DIR: C:\ai-playwright-cache\full-suite-regression
         run: |
           import subprocess
           import sys
@@ -440,7 +432,8 @@ jobs:
           is_regression = (os.environ.get("IS_REGRESSION_INPUT", "false").lower() == "true" or
                           os.environ.get("IS_SCHEDULE", "false").lower() == "true")
           cache_hit = os.environ.get("CACHE_HIT", "false").lower() == "true"
-          cache_file = os.path.join(workspace, ".ci-cache", "full-suite-regression", "latest-full-suite.json")
+          cache_dir = os.environ.get("FULL_SUITE_CACHE_DIR", os.path.join(workspace, ".ci-cache", "full-suite-regression"))
+          cache_file = os.path.join(cache_dir, "latest-full-suite.json")
           cache_file_exists = os.path.exists(cache_file)
           
           print("\n" + "="*80)
@@ -479,12 +472,13 @@ jobs:
       - name: Debug cache files
         if: always()
         shell: python
+        env:
+          FULL_SUITE_CACHE_DIR: C:\ai-playwright-cache\full-suite-regression
         run: |
           from pathlib import Path
           import os
 
-          workspace = Path(os.environ.get("GITHUB_WORKSPACE", "."))
-          cache_dir = workspace / ".ci-cache" / "full-suite-regression"
+          cache_dir = Path(os.environ.get("FULL_SUITE_CACHE_DIR", ".ci-cache/full-suite-regression"))
           cache_file = cache_dir / "latest-full-suite.json"
 
           print(f"[INFO] cache_dir exists: {cache_dir.exists()} -> {cache_dir}")
@@ -493,13 +487,6 @@ jobs:
             print("[INFO] cache_dir contents:")
             for item in sorted(cache_dir.glob("*")):
               print(f"  - {item.name}")
-
-      - name: Save full suite cache (for next runs)
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ github.workspace }}/.ci-cache/full-suite-regression/
-          key: full-suite-regression-cache
 
       - name: Upload comparison report
         if: always()
@@ -545,18 +532,11 @@ jobs:
           npm install
           npx playwright install
 
-      - name: Restore cache (if exists)
-        uses: actions/cache@v4
-        with:
-          path: .ci-cache/full-suite-regression/
-          key: full-suite-regression-cache
-          restore-keys: |
-            full-suite-regression-cache
-
       - name: Run full regression with cache update
         shell: python
         env:
           PYTHONIOENCODING: utf-8
+          FULL_SUITE_CACHE_DIR: C:\ai-playwright-cache\full-suite-regression
         run: |
           import subprocess
           import sys
@@ -576,13 +556,6 @@ jobs:
           result = subprocess.run(command, check=False)
           
           sys.exit(result.returncode)
-
-      - name: Save cache (for PR runs)
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: .ci-cache/full-suite-regression/
-          key: full-suite-regression-cache
 
       - name: Upload regression report
         if: always()
